@@ -10,7 +10,7 @@ This directory defines the downstream AI-Coding platform built on LoopX.
 4. [`node-layout.md`](node-layout.md) — canonical filesystem and configuration locations.
 5. [`host-matrix.md`](host-matrix.md) — Codex/Kiro/Qwen/Claude integration boundaries.
 6. [`bootstrap-validation.md`](bootstrap-validation.md) — clean-node and disposable-project validation checklist.
-7. [`agent-run-contract.md`](agent-run-contract.md) — normalized Agent Run lifecycle, evidence, and usage facts.
+7. [`agent-contract.md`](agent-contract.md) — normalized Agent Run lifecycle, evidence, and usage facts.
 8. [`dashboard.md`](dashboard.md) — dual-dashboard boundary and the three-tab product information architecture.
 9. [`qwen-code-adapter.md`](qwen-code-adapter.md) — downstream Qwen Code integration strategy.
 10. [`phase-0.md`](phase-0.md) — Phase 0 work packages and acceptance criteria.
