@@ -12,7 +12,8 @@ surfaces, and project paths. The only machine-level difference is `node_role`.
 | Development user | `gany` | `gany` |
 | Development home | `/home/gany` | `/home/gany` |
 | Git workspace | `/project` | `/project` |
-| LoopX platform checkout | `/project/loopx` | `/project/loopx` |
+| LoopX development checkout | `/project/loopx` | `/project/loopx` |
+| Stable LoopX releases | `/home/gany/.local/share/loopx/releases` | same |
 | Scratch workspace | `/project/.scratch` | `/project/.scratch` |
 | User commands | `/home/gany/.local/bin` | `/home/gany/.local/bin` |
 | LoopX Dashboard | `127.0.0.1:8767` | `127.0.0.1:8767` |
@@ -25,6 +26,10 @@ and ordinary shell work observe the same source tree.
 `gany` is a real Unix development account and is added to the `sudo` group. Sudo
 remains password-protected; the initializer does not grant `NOPASSWD: ALL`.
 
+When the administrator account used for bootstrap already has SSH public-key
+access, the initializer copies its `authorized_keys` to `gany` only when `gany`
+does not already have keys. It does not enable password SSH authentication.
+
 The default web bind is loopback-only. Dashboards can later be exposed through
 the private network or a controlled reverse proxy.
 
@@ -32,20 +37,24 @@ the private network or a controlled reverse proxy.
 
 The canonical initializer installs:
 
-- Ubuntu build/runtime tools, Git, Git LFS, SSH client, tmux, jq, rsync, and
-  GitHub CLI (`gh`);
+- Ubuntu build/runtime tools, Git, Git LFS, SSH client, tmux, jq, rsync, pytest,
+  and GitHub CLI (`gh`);
 - Node.js 22 when the machine does not already have a sufficiently recent Node;
 - the `gany` development account and `/project` workspace;
-- the `zkzchb/loopx` `platform` branch at `/project/loopx`;
+- the `zkzchb/loopx` `platform` branch at `/project/loopx`, with `origin/main`
+  available for additive-boundary checks;
 - Codex CLI as the primary interaction/planning/review lane;
 - Kiro CLI as the secondary planning/execution lane;
 - Qwen Code as the worker lane;
-- LoopX from the platform checkout;
-- upstream LoopX Codex and Kiro host surfaces;
-- downstream Qwen Skill + MCP integration using LoopX `generic_cli` semantics;
+- an immutable promoted LoopX baseline release copied from the current platform
+  commit, rather than running normal work directly from `/project/loopx`;
+- upstream LoopX Codex and Kiro host surfaces generated from that stable release;
+- downstream Qwen Skill + a release-specific Qwen MCP environment generated from
+  that stable release;
 - dependencies for both Dashboard applications;
-- the canonical node environment and Agent inventory;
-- `ai-coding-doctor` for read-only validation.
+- the canonical node environment, runtime binding, and Agent inventory;
+- `ai-coding-doctor` for read-only validation;
+- `ai-coding-loopx` for canary / validate / promote / rollback lifecycle control.
 
 Claude Code remains a backup lane rather than a default dependency of the base
 server image. LoopX upstream support for it is retained.
@@ -64,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/zkzchb/loopx/platform/scripts/ai-co
   | bash -s -- --role pds-lab
 ```
 
-After PDS-Lab passes the clean-machine validation, initialize PDS with the same
+After PDS-Lab passes clean-machine validation, initialize PDS with the same
 script and only change the role:
 
 ```bash
@@ -72,13 +81,37 @@ curl -fsSL https://raw.githubusercontent.com/zkzchb/loopx/platform/scripts/ai-co
   | bash -s -- --role pds
 ```
 
-If `gany` already exists, the initializer preserves its password by default. To
-intentionally reset the password:
+The default stable baseline label is `1.0`. It can be changed explicitly if a
+future fresh-machine image is intended to start from another platform baseline:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zkzchb/loopx/platform/scripts/ai-coding-init.sh \
-  | bash -s -- --role pds-lab --reset-password
+... | bash -s -- --role pds-lab --baseline-label 1.1
 ```
+
+If `gany` already exists, the initializer preserves its password by default. To
+intentionally reset the password, add `--reset-password`.
+
+## Development checkout vs stable runtime
+
+The source tree and the running control plane are intentionally different:
+
+```text
+/project/loopx
+    mutable development checkout
+
+/home/gany/.local/share/loopx/releases/ai-coding-1.0-<sha>/
+    immutable stable runtime
+
+/home/gany/.local/bin/loopx
+    -> stable release scripts/loopx
+```
+
+Editing `/project/loopx` therefore does not change normal LoopX behavior, the
+Qwen MCP bridge, or helper commands. Only `loopx-canary` may point at the mutable
+checkout during development.
+
+See [`runtime-lifecycle.md`](runtime-lifecycle.md) for the self-host development
+and upgrade flow.
 
 ## Authentication boundary
 
@@ -92,8 +125,7 @@ After initialization:
 su - gany
 ```
 
-Authenticate GitHub first so private repositories under `/project` can be cloned
-and managed with the GitHub CLI:
+Authenticate GitHub first:
 
 ```bash
 gh auth login
@@ -103,19 +135,15 @@ Then authenticate each coding tool interactively:
 
 ```bash
 codex login
-# verify with: codex login status
-
 qwen
-# complete the provider/auth flow when needed
-
 kiro-cli
-# complete the Kiro sign-in flow
 ```
 
 Finally:
 
 ```bash
 ai-coding-doctor
+ai-coding-loopx status
 ```
 
 ## Canonical node configuration
@@ -124,15 +152,18 @@ The initializer writes:
 
 ```text
 /home/gany/.config/ai-coding/env.sh
+/home/gany/.config/ai-coding/node.env
+/home/gany/.config/ai-coding/runtime.env
 /home/gany/.config/ai-coding/agents.json
 ```
 
-`env.sh` standardizes the development PATH, node role, `/project`, LoopX
-platform path, Dashboard ports, and host homes.
+`env.sh` standardizes machine paths and sources `runtime.env`.
+
+`runtime.env` identifies the currently selected immutable LoopX release and its
+matching Qwen MCP Python runtime.
 
 `agents.json` is the machine inventory consumed by the downstream Extension,
-Dashboard, telemetry, and future dispatch logic. Consumers should read this
-inventory instead of rediscovering binaries independently.
+Dashboard, telemetry, and future dispatch logic.
 
 ## Machine setup vs project setup
 
