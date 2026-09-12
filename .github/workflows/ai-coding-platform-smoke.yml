@@ -34,10 +34,21 @@ jobs:
       - name: Validate shell syntax
         run: |
           bash -n \
+            scripts/ai-coding-init.sh \
             scripts/ai-coding-bootstrap.sh \
+            scripts/ai-coding-bind-runtime.sh \
+            scripts/ai-coding-loopx.sh \
             scripts/ai-coding-doctor.sh \
             scripts/ai-coding-project-init.sh \
             scripts/ai-coding-sync-upstream.sh
+
+      - name: Verify runtime lifecycle helpers are executable
+        run: |
+          test -x scripts/ai-coding-init.sh
+          test -x scripts/ai-coding-bind-runtime.sh
+          test -x scripts/ai-coding-loopx.sh
+          test -x scripts/ai-coding-doctor.sh
+          test -x scripts/ai-coding-project-init.sh
 
       - name: Compile downstream Python modules
         run: |
