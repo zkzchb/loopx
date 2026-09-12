@@ -21,6 +21,7 @@ def test_periodic_report_editor_is_shared_across_machine_and_goal_scopes() -> No
         "profile_preset",
         "route_ref",
         "timezone",
+        "schedule",
     ]
 
 
@@ -108,7 +109,15 @@ def test_goal_configuration_uses_the_shared_capability_catalog() -> None:
     assert {item["capability_id"] for item in shared["capabilities"]} == {
         item["feature_id"] for item in catalog["features"]
     }
-    assert all(item["available_scopes"] == ["goal"] for item in shared["capabilities"])
+    scopes = {
+        item["capability_id"]: item["available_scopes"]
+        for item in shared["capabilities"]
+    }
+    assert scopes["todo_replan_cadence"] == ["goal"]
+    assert scopes["change_quality_qualification"] == ["goal"]
+    assert all(
+        item["available_scopes"] == ["goal"] for item in shared["capabilities"]
+    )
     multi_subagent = next(
         item
         for item in shared["capabilities"]

@@ -57,7 +57,7 @@ CASES = [
     Case('todo_successor_scope_unbound', (('loopx/control_plane/todos/authoring_scope.ts', replacement(
         'if (blocks && (goal || !bound || bound !== blocks)) return "agent_binding_conflict";', '')),),
          'tests/control_plane_ts/todo_authoring_scope.test.ts', 'resolved successor scope'),
-    Case('monitor_route_drops_invalid_capability', (('loopx/control_plane/scheduler/monitor_successor.ts', replacement(
+    Case('monitor_route_drops_invalid_capability', (('loopx/control_plane/todos/work_requirements.ts', replacement(
         '      throw new EffectRuntimeRequestError(`${label} must contain public-safe capability tokens; invalid entries cannot be dropped`);',
         '      continue;')),),
          'tests/control_plane_ts/monitor_successor.test.ts', 'invalid successor intent is rejected'),
@@ -91,9 +91,9 @@ CASES = [
         '  const next: JsonObject = {...todo, ...input.patch};',
         '  const next: JsonObject = {...todo, ...input.patch};\n  if ("note" in input.patch) next.note = todo.note;')),),
          'tests/control_plane/test_shadow_observable_native_e2e.py::test_native_unclaimed_edit_and_explicit_note_clear[disabled]'),
-    Case('native_unclaimed_edit_rejected', ((COORDINATION + 'todo_update.ts', replacement(
-        '  if (todo.claimed_by && todo.claimed_by !== input.actor_agent_id) {',
-        '  if (!todo.claimed_by || todo.claimed_by !== input.actor_agent_id) {')),),
+    Case('native_unclaimed_edit_rejected', ((COORDINATION + 'todo_lifecycle_decision.ts', replacement(
+        '  if (todo.claimed_by !== null && todo.claimed_by !== actor) return "claim_owner_mismatch";',
+        '  if (todo.claimed_by === null || todo.claimed_by !== actor) return "claim_owner_mismatch";')),),
          'tests/control_plane/test_shadow_observable_native_e2e.py::test_native_unclaimed_edit_and_explicit_note_clear[disabled]'),
     Case('native_diagnostic_truncated', ((COORDINATION + 'todo_update.ts', replacement(
         'return failure("update_owner_mismatch", "Todo update cannot edit another claim owner\'s work");',

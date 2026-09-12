@@ -1084,8 +1084,27 @@ Stage 3/4 qualification 必须保持以下 ownership 与 proof 边界：
 | Stage 2B PostgreSQL candidate | PostgreSQL store/RLS conformance，不代表 runtime promotion |
 | Stage 2C runtime shadow | parity、read-candidate、bootstrap、rollback、cutover kernel 与 writer fence |
 | Stage 2 slice | reference aggregate/provider 实现与初步 NoKV 证据 |
+| Stage 1 semantic transaction core (#4280) | 共享严格 transaction 解码、clone 隔离、revision 投影，以及 file/NoKV parity fixture |
 | Stage 3 slice | 可恢复 lifecycle、retention 结论与 live provider 限制 |
 | Stage-ladder evidence | 可执行 stage claim、环境 gate 与 pending row |
+
+#### Stage 1 semantic transaction core（#4280）：共享 transaction 语义核心
+
+file 与 NoKV adapter 现在共同使用
+`loopx/control_plane/coordination/authority_store_transactions.ts`。该模块负责
+committed transaction 的精确顶层 key 集合、严格 JSON/object-list 校验、canonicalization、
+显式 structured clone，以及逻辑 `transactionForRevision` 投影。provider envelope、
+storage generation、failure mapping 与 provider-specific revision salt 仍由各自 adapter
+负责。这样消除了重复的语义知识，但没有增加新的 authority writer，也没有改变默认的
+authority source。SQLite 与 PostgreSQL 的 row/envelope 迁移仍属于后续 provider stage。
+
+公开 fixture 位于
+`tests/control_plane_ts/authority_store_transactions.test.ts`，会把 native、reordered
+legacy-compatible、unknown-key、malformed-list、malformed-nested 与 non-string identity
+记录同时送入 shared decoder 以及当前两个 active provider 的 file/NoKV read path。它还
+验证 scan 结果是隔离 clone，并验证 provider metadata 不会进入 logical revision projection。
+这些是 Stage 1 parity 证据，不代表 provider promotion，也不代表后续 provider profile
+已经完成资格化。
 
 #### Stage 2C 观察基础：本地提交后 capture
 
@@ -2102,6 +2121,13 @@ selector 见 TS RFC 的 T3 卡。真实 FileAuthorityStore CLI 测试覆盖展�
 不写回。这是 consumer 规则收拢，不是 transaction/store 改造、provider 资格化或
 整 Goal cutover。
 
+长链 checkpoint 读取现由同一 typed frontier revision/ACK 策略处理 legacy 与 canonical
+来源（TS RFC T3）。Index 在展示限制之前生成；被排除工作不能误触发该 Agent，
+不完整或有歧义的 checkpoint 不能确认长链已处理。Python 保留持久 v0 codec，
+不再持有第二套 revision/threshold 策略。这是 consumer 改造，不新增 provider、
+commit receipt、promotion 路由或 Markdown writer。既有 CAS/replay、永久投影与
+D1–D3 资格化要求保持不变。
+
 以下规划保留原有方向；执行卡是它们的展开，不是替代或取消：
 
 1. **闭合 TS 事务与 consumer。** 按 [T0–T3](typescript-control-plane-migration-v0.zh-CN.md#当前-stack-合入后的执行卡) 收口规则并删除重复决策。
@@ -2110,6 +2136,22 @@ selector 见 TS RFC 的 T3 卡。真实 FileAuthorityStore CLI 测试覆盖展�
 4. **列明 caller 后退役。** 按 T4 删除无调用者的旧业务 writer；永久 renderer 和必要 import/export 保留。
 
 #### 持久化执行卡
+
+Task graph 的 T3 topology consumer 现共用 inventory/horizon 关系目录，消费
+一次已提供的 status 快照。缺失/截断指标描述读取完整度，不代表 canonical
+有效性或 promotion 资格。File/SQLite 在 Markdown 展示缺失时的 reader 回放
+必须只读：图不修复展示，也不改变 authority。本批删除 Python 重复关系与
+遍历知识，不改变以下 D1–D3 门禁。
+
+T3 lease inspect 已将 Todo、lease 与 handoff mode 绑定到同一 provider revision，
+promotion 后不再读取本地旧 lease 文件；canonical 空租约集合保持为空。资格策略与
+当前 acquire/lifecycle 共用 TS owner，包含 claim 分歧和 exclusion；读取结果不是
+租约授权，也不是 commit receipt。该 reader 闭合和重复规则删除不代表 provider
+资格化，不改变 CAS/replay 或 D1–D3；永久 Markdown 展示与后续规划继续保留。
+ownership 编辑在 promotion 后现在与现有 update transaction 共用 typed authoring
+和 lifecycle 边界。claim/exclusion 门禁保留，带 lease 的 ownership 重写继续拒绝；
+promotion 前仍保留 Markdown writer 兼容路径。这删除了一条重复决策路径，但不代表
+provider 已资格化、不改变 promotion 默认值，也不放宽 D1–D3。
 
 命令清单、update/monitor 事务和 consumer 删除统一按
 [TS 执行卡](typescript-control-plane-migration-v0.zh-CN.md#当前-stack-合入后的执行卡)
@@ -2125,6 +2167,11 @@ wire，不改变 provider 默认或 promotion。这仍是有界的非 terminal p
 不是通用 native metadata 支持；Active lease 下的状态变化及 Monitor 规划/effect 仍不
 支持。准入结果和 lease-fence 结果都不是 commit receipt；兑现删除收益时，provider
 CAS/replay 与既有 writer 持锁生命周期不变。
+同一事务现通过共享公开 TS planner 接受有界工作要求声明，字段清单和有意拒绝变化见
+T1。File、NoKV、SQLite 与 PostgreSQL conformance 覆盖别名、显式清空、后续编辑后
+的旧操作重放、非法输入原子性和 lease 拒绝；复杂容量 fixture 携带工作要求验证其他
+lifecycle 操作不会丢字段。这不资格化新 profile、不扩大 execution grant，也不改变
+D1–D3／promotion hold；Markdown 继续作为独立的永久投影。
 等待/恢复 lane 选择现由 quota、vision-wait、agent-scope、replan 共用一个 TS 读取
 策略 owner，删除旧 Python selector 模块。适配层在 promotion 后消费同一 canonical
 summary，之前消费 legacy summary；真实 CLI 覆盖容量变化和 promoted display
@@ -2137,7 +2184,19 @@ T3 decision-dependency 读取策略现由同一 TS owner 解释 scope coverage�
 不改变默认 provider 或放宽 D3 promotion hold。Markdown 继续作为永久单向展示，
 后续执行卡与退役条件保留。
 
+Scoped fallback 的选择与门禁关系也已复用同一 TS decision owner，删除 Python
+词语重合匹配和选择循环。显式依赖及 global gate 保留，旧完整 action key 相同仅
+保留阻塞兼容；键不同或缺少事实不能证明独立性。这是披露语义变化的 T3 consumer 闭合，
+不是新 provider，也不代表 D1–D3 已资格化。来源适配、永久投影和 promotion hold
+不变；具体规则见 TS 执行卡及 decision-scope 协议。
+
 **D1 — 资格化永久投影交付，可与 T1/T2 重叠推进。**
+
+能力缺口 consumer 在 legacy/canonical 输入上共用 TS requirement/resolution owner，
+包括 quota 的 Monitor 能力分流。删除 Python missing-set 与 owner/repair 决策 builder，
+保留来源适配和只读候选排序。这是披露修复优先级、空来源和 identity 修正的 T3 读取
+规则收拢，不是能力启用、持久权限回执或 D1–D3 资格化。永久 Markdown 投影与 cutover
+门禁不变。
 
 T2 的无 lease 原生 Monitor 观察与独立后继现由同一 canonical CAS／receipt 提交；
 route planner 本身仍不授予权限。CLI 将已提交回执交给既有 journal/outbox renderer，

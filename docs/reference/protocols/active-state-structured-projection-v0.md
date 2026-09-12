@@ -190,6 +190,29 @@ canonical. After promotion, a provider outage or revision mismatch fails
 closed; operators may restore a reviewed provider snapshot and regenerate the
 Todo sections, but must not promote stale Markdown back to canonical truth.
 
+## Lease inspection / 租约检查
+
+`loopx task-lease inspect --goal-id <goal> --todo-id <todo>` follows the same
+promotion boundary as Todo reads. Before promotion it reads the existing local
+lease store. After promotion it reads Todo, lease and handoff mode from one
+canonical revision, reports `source_authority`, `provider_revision` and
+`legacy_fallback_used=false`, and returns `lease_path=null` because no local
+lease JSON is authoritative. Canonical absence returns `lease=null, active=false`;
+provider errors fail the read, never revive stale local files or repair display.
+
+`active` retains its existing meaning of an effective lease, not just an
+unexpired timestamp. The retained `lease.status` can remain `active` while
+`executor_constraint` explains a removed/excluded owner or divergent claim.
+The shared typed owner predicate does not grant execution, mutate claims or
+settle work. Release still requires its own key/version fence and remains usable
+for cleanup after eligibility is lost. Acquire derives current effectiveness
+from facts; old wire `effective` hints are accepted but cannot override them.
+
+中文：promotion 后检查租约必须读取同一 revision 的 Todo/lease/handoff mode，
+不能拼接本地旧文件。canonical 缺失表示无租约；来源故障明确失败。`active` 仍表示
+有效租约，未过期但持有人失去资格时返回原因，不自动续租、转移或清理。
+读取不提供写授权；release 的 key/version 门禁与幂等、CAS 规则保持不变。
+
 ## Migration Path
 
 The projector accepts complete legacy records and native `TodoDomainRecord`
@@ -199,7 +222,7 @@ machine-owned `Completed Work Archive` region (created when needed) and retain
 their original `role`. Unknown canonical fields and unsafe region ownership
 continue to fail closed.
 
-For promoted provider-first Todo create, claim, and narrow text/note update,
+For promoted provider-first Todo create, claim, and supported text/planning updates,
 the committed authority journal is the transaction-bound projection outbox:
 the canonical mutation, complete head, cursor, revision, and receipt land in
 one provider transaction. After that commit, the Python compatibility adapter
@@ -208,6 +231,18 @@ renderer/write failure leaves typed `pending` delivery
 evidence without reversing or hiding the canonical commit. A later successful
 mutation or `todo project-markdown --execute` replays the current head
 idempotently. This is projection recovery, not a second authority path.
+
+Supported non-Monitor Agent updates include action/domain/repository and required
+write scopes, required/target capabilities and Explore node references. These
+declarations use the same canonical planning transaction, not a direct Markdown
+edit. Invalid supplied members reject the entire update; empty collections clear
+the declaration. They do not grant execution rights, change a lease, or approve
+a User decision. Work-requirement edits with a retained lease remain unsupported.
+
+非 Monitor Agent Todo 的 action/domain/repository、写入范围、required/target
+capability 和 Explore 引用声明复用同一 canonical planning 事务，不直接编辑
+Markdown。非法输入整笔拒绝，空集合明确清除；声明不授予执行权、不变更 lease，
+也不批准 User 决策。带保留 lease 的工作要求编辑仍不支持。
 
 ### Generated display recovery / 生成式展示恢复
 

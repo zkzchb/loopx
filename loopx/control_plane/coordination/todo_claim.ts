@@ -1,3 +1,4 @@
+import {leaseOwnerRejection as ownerRejection} from "../work_items/task_lease_eligibility.ts";
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStore, AuthorityStoreCommit, AuthorityStoreReceiptResult } from "./authority_store.ts";
 import {
@@ -6,6 +7,8 @@ import {
   canonicalAuthoritySha256,
   requireAuthorityStoreId,
 } from "./authority_store_codec.ts";
+import {validateContinuationNote, computeContinuationTodoFacts} from "./continuation_note.ts";
+import {projectionDelivery} from "../todos/projection_delivery.ts";
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.ts";
 import {
   prepareCoordinationProjectionCommit,
@@ -22,7 +25,6 @@ import {
   normalizeIdempotencyKey,
   normalizeTtl,
   normalizeWriteScopes,
-  ownerRejection,
   TASK_LEASE_SCHEMA_VERSION,
   utcIsoformat,
   type LeaseRecord,
@@ -36,6 +38,15 @@ export const COORDINATION_TODO_CLAIM_RECEIPT_SCHEMA =
 export const COORDINATION_TODO_CLAIM_DECISION_SCHEMA =
   "loopx_coordination_todo_claim_decision_v0";
 
+export interface CoordinationTodoClaimTransferGrant {
+  readonly schema_version: "todo_transfer_grant_v0";
+  readonly source_agent_id: string;
+  readonly target_agent_id: string;
+  readonly todo_id: string;
+  readonly expected_revision: string;
+  readonly continuation_note_facts: string;
+}
+
 export interface CoordinationTodoClaimInput {
   readonly goal_id: string;
   readonly todo_id: string;
@@ -44,6 +55,8 @@ export interface CoordinationTodoClaimInput {
   readonly expected_role: string | null;
   readonly registered_agents: readonly string[];
   readonly operation_id: string;
+  readonly expected_provider_revision?: string;
+  readonly transfer_grant?: CoordinationTodoClaimTransferGrant;
   readonly lease_request?: CoordinationTodoClaimLeaseRequest | null;
   readonly dry_run: boolean;
   readonly now: Date;
@@ -200,6 +213,7 @@ function rejectIneligibleTodo(
 export function evaluateCoordinationTodoClaimDecision(
   todo: JsonObject,
   input: CoordinationTodoClaimInput,
+  activeLeaseOwner?: string | null,
 ): CoordinationTodoClaimDecision {
   const registered = input.registered_agents;
   const owner = input.claimed_by;
@@ -217,12 +231,41 @@ export function evaluateCoordinationTodoClaimDecision(
   const existing = typeof todo.claimed_by === "string" && todo.claimed_by.length > 0
     ? normalizeTodoAgent(todo.claimed_by, "todo.claimed_by")
     : null;
+  // Cross-agent transfer requires an explicit handoff transfer grant.
+  // The grant binds source owner, target owner, todo id, revision, and
+  // current continuation-note facts; it can only be produced by the handoff
+  // flow. Without a valid grant, foreign-owner claims are always rejected.
+  // The final claim authority reuses the shared validateContinuationNote so
+  // the prepared-note invariant is enforced in one place: an arbitrary JSON
+  // note with matching hash is rejected because it lacks the typed marker,
+  // bounded fields, and current todo_facts.
   if (existing !== null && existing !== owner) {
-    return decisionFailure(
-      "claim_owner_mismatch",
-      "Todo is already claimed by another agent",
-      { claim_owner: existing },
-    );
+    const grant = input.transfer_grant;
+    let grantValid = false;
+    if (grant != null) {
+      // Validate the continuation note using the shared predicate. This
+      // enforces the typed loopx-explicit-continuation invariant: marker,
+      // bounded fields, source session, and current todo_facts. An invalid
+      // note yields empty noteFacts, which cannot match a real grant.
+      const noteValidation = validateContinuationNote(todo.note, computeContinuationTodoFacts(todo));
+      grantValid = noteValidation.valid
+        && grant.schema_version === "todo_transfer_grant_v0"
+        && grant.source_agent_id === existing
+        && grant.target_agent_id === owner
+        && grant.todo_id === todo.todo_id
+        && grant.expected_revision === input.expected_provider_revision
+        && grant.continuation_note_facts === noteValidation.noteFacts
+        && registered.includes(existing)
+        && registered.includes(owner);
+    }
+    const leasedByOther = activeLeaseOwner !== undefined && activeLeaseOwner !== null && activeLeaseOwner === existing;
+    if (leasedByOther || !grantValid) {
+      return decisionFailure(
+        "claim_owner_mismatch",
+        "Todo is already claimed by another agent",
+        { claim_owner: existing },
+      );
+    }
   }
   const mode = registered.length <= 1 ? "single_agent_compatibility" : "registered_peer_actor";
   return {
@@ -357,6 +400,9 @@ export async function executeCoordinationTodoClaim(
     claimed_by: input.claimed_by,
     actor_agent_id: input.actor_agent_id,
     expected_role: input.expected_role,
+    ...(input.expected_provider_revision === undefined ? {} :
+      {expected_provider_revision: input.expected_provider_revision}),
+    ...(input.transfer_grant === undefined ? {} : {transfer_grant: input.transfer_grant}),
     dry_run: input.dry_run,
     ...(leaseRequest === null ? {} : {lease_request: leaseRequest}),
   });
@@ -405,7 +451,7 @@ export async function executeCoordinationTodoClaim(
       provider_revision: receipt.provider_revision,
       cursor: receipt.cursor,
       original_receipt: original,
-      projection_delivery: result.changed === false ? "not_required" : "pending",
+      projection_delivery: projectionDelivery(result.changed !== false),
       projection_source: "committed_authority_journal",
     };
   };
@@ -418,6 +464,11 @@ export async function executeCoordinationTodoClaim(
       schema_version: COORDINATION_TODO_CLAIM_RESULT_SCHEMA,
       ...head,
     } as CoordinationTodoClaimResult;
+  }
+
+  if (input.expected_provider_revision !== undefined &&
+      input.expected_provider_revision !== head.provider_revision) {
+    return failure("provider_revision_mismatch", "Current revision changed; inspect again before continuing");
   }
 
   let projection: ReturnType<typeof indexCoordinationProjection>;
@@ -440,9 +491,14 @@ export async function executeCoordinationTodoClaim(
     );
   }
 
+  const activeLeaseOwner = projection.leases.get(input.todo_id);
+  const activeLeaseActive = activeLeaseOwner !== undefined && leaseIsActive(activeLeaseOwner, input.now);
+  const activeLeaseHolder = activeLeaseActive && activeLeaseOwner !== undefined && typeof activeLeaseOwner.owner === "string"
+    ? normalizeTodoAgent(activeLeaseOwner.owner, "lease.owner")
+    : null;
   let authority: ReturnType<typeof evaluateCoordinationTodoClaimDecision>;
   try {
-    authority = evaluateCoordinationTodoClaimDecision(todo, input);
+    authority = evaluateCoordinationTodoClaimDecision(todo, input, activeLeaseHolder);
   } catch (error) {
     return failure(
       "invalid_coordination_todo_claim",
@@ -481,11 +537,6 @@ export async function executeCoordinationTodoClaim(
     if (handoffMode === "hard_lease" && leaseRequest !== null) {
       const todoFact = todoLeaseFact(todo);
       const currentActive = currentLease !== undefined && leaseIsActive(currentLease, input.now);
-      const currentEffective = currentLease !== undefined && currentActive && ownerRejection(
-        todoFact,
-        normalizeAgent(currentLease.owner),
-        input.registered_agents,
-      ) === null;
       const otherLeases = projection.lease_todo_ids.flatMap((todoId) => {
         if (todoId === input.todo_id) return [];
         const candidate = projection.leases.get(todoId)!;
@@ -510,7 +561,6 @@ export async function executeCoordinationTodoClaim(
         lease: currentLease === undefined ? null : {
           present: true,
           active: currentActive,
-          effective: currentEffective,
           status: typeof currentLease.status === "string" ? currentLease.status : null,
           owner: normalizeAgent(currentLease.owner),
           idempotency_key: typeof currentLease.idempotency_key === "string"

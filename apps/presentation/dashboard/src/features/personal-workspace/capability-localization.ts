@@ -105,6 +105,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
 
 const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
   en: {
+    completed_todos: { label: "Completed Todos between Goal reviews", description: "Machine default or explicit Goal override, from 1 to 5." },
     allowed_domains: { label: "Allowed responsibility domains", description: "Enter one bounded, public-safe domain per line." },
     coordinator_agent_id: { label: "Coordinator Agent", description: "Use an already registered Agent id; leave blank to disable coordination." },
     enabled: { label: "Enabled" },
@@ -117,8 +118,10 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     safe_fix: { label: "Allow one bounded safe-fix pass" },
     strict_receipt: { label: "Require an exact-diff receipt" },
     timezone: { label: "Timezone", description: "Use an IANA timezone, for example Asia/Shanghai." },
+    schedule: { label: "Calendar reports", description: "Optional daily or weekly reports; no schedule preserves stage-only delivery." },
   },
   "zh-CN": {
+    completed_todos: { label: "两次 Goal 复核间的已完成 Todo 数", description: "可设置 1–5；机器默认值可被 Goal 显式覆盖。" },
     allowed_domains: { label: "允许的职责域", description: "每行填写一个有边界、可公开的职责域。" },
     coordinator_agent_id: { label: "协调 Agent", description: "填写一个已经注册的 Agent ID；留空表示关闭协调。" },
     enabled: { label: "启用" },
@@ -131,6 +134,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     safe_fix: { label: "允许一次有界安全修复" },
     strict_receipt: { label: "要求精确 diff 回执" },
     timezone: { label: "时区", description: "使用 IANA 时区，例如 Asia/Shanghai。" },
+    schedule: { label: "日历汇报", description: "可选每日或每周计划；未设置时保持阶段结束汇报。" },
   },
 };
 

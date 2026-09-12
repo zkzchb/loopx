@@ -10,6 +10,61 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 export const typedActionsScenario = {
   id: "typed-actions",
   async run({ browser, collectCoverage, url }) {
+    // Real Goal button -> typed preview -> compiler -> drawer/apply, with only
+    // the service boundary controlled. No test computes the plan under review.
+    for (const width of [1512, 390]) {
+      const review = await openWorkspacePage(browser, url, { viewport: { width, height: 982 } });
+      const { page: reviewPage, api: reviewApi } = review;
+      try {
+        for (const [patch, mode] of [
+          [{ permission_classification: "protected" }, "review"],
+          [{ validation_evidence: [] }, "refresh"],
+          [{ stale: { current_state_fingerprint: "fixture-r2" } }, "refresh"],
+        ]) {
+          const before = reviewApi.actionApplies.length;
+          reviewApi.nextLifecycleProposalPatch = patch;
+          if (width < 640) await reviewPage.locator(".personal-mobile-menu").click();
+          await reviewPage.getByRole("button", { name: "停止 Product Release", exact: true }).click();
+          await reviewPage.locator(`[data-action-review="${mode}"]`).waitFor({ state: "visible" });
+          if (reviewApi.actionApplies.length !== before) throw new Error("Unsafe lifecycle preview applied directly");
+          if (reviewApi.goalActivationStates.get("product-release") !== "active") throw new Error("Unsafe preview changed state");
+          if (mode === "refresh" && !(await reviewPage.getByRole("button", { name: "停止 Goal", exact: true }).isDisabled())) throw new Error("Incomplete or stale preview remained applicable");
+          await reviewPage.getByRole("button", { name: "关闭", exact: true }).click();
+        }
+        for (const evidence of [[null], [""], [" \t"], [{}], ["valid", null], ["valid", {}], ["valid", ""]]) {
+          const before = reviewApi.actionApplies.length;
+          reviewApi.nextLifecycleProposalPatch = { validation_evidence: evidence };
+          if (width < 640) await reviewPage.locator(".personal-mobile-menu").click();
+          await reviewPage.getByRole("button", { name: "停止 Product Release", exact: true }).click();
+          await reviewPage.locator(".personal-action-feedback").filter({ hasText: "validation_evidence" }).waitFor({ state: "visible" });
+          if (reviewApi.actionApplies.length !== before) throw new Error("Malformed evidence bypassed the transport schema and applied");
+          if (reviewApi.goalActivationStates.get("product-release") !== "active") throw new Error("Malformed evidence changed durable state");
+          if (await reviewPage.locator('[data-action-review="direct"]').count()) throw new Error("Malformed evidence produced a direct review plan");
+          if (width < 640) await reviewPage.locator(".personal-mobile-menu").click();
+          await reviewPage.getByRole("button", { name: "停止 Product Release", exact: true }).waitFor({ state: "visible" });
+          if (width < 640) await reviewPage.keyboard.press("Escape");
+        }
+        reviewApi.nextLifecycleProposalPatch = { normalized_parameters: { goal_id: "other-goal", operation: "stop" }, context: { goal_id: "other-goal" } };
+        const beforeMismatch = reviewApi.actionApplies.length;
+        if (width < 640) await reviewPage.locator(".personal-mobile-menu").click();
+        await reviewPage.getByRole("button", { name: "停止 Product Release", exact: true }).click();
+        await reviewPage.getByText("预览目标与请求的 Goal 或操作不一致", { exact: false }).waitFor({ state: "visible" });
+        if (reviewApi.actionApplies.length !== beforeMismatch) throw new Error("Mismatched response target was applied");
+        for (const outcome of ["stale", "unverified", "mismatch-id", "mismatch-goal", "mismatch-operation"]) {
+          reviewApi.nextLifecycleApplyOutcome = outcome;
+          if (width < 640) await reviewPage.locator(".personal-mobile-menu").click();
+          await reviewPage.getByRole("button", { name: "停止 Product Release", exact: true }).click();
+          await reviewPage.locator(`[data-action-review="${outcome === "stale" ? "refresh" : "repair"}"]`).waitFor({ state: "visible" });
+          if (await reviewPage.getByText("已应用，LoopX 状态将刷新。", { exact: true }).count()) throw new Error("Unverified or stale apply displayed completion");
+          if (reviewApi.goalActivationStates.get("product-release") !== "active") throw new Error("Failed apply lost rollback");
+          if (outcome !== "stale" && await reviewPage.getByText("应用失败，没有写入任何变更。", { exact: true }).count()) throw new Error("Unverified readback falsely claimed no write");
+          await reviewPage.screenshot({ path: resolve(outputDir, `action-review-${width}-${outcome}.png`), fullPage: false, animations: "disabled" });
+          await reviewPage.getByRole("button", { name: "关闭", exact: true }).click();
+        }
+      } finally {
+        await review.close();
+      }
+    }
     const capabilityOff = await openWorkspacePage(browser, url, {
       apiOptions: { goalSubagentConfigurationEnabled: false },
     });
@@ -67,6 +122,7 @@ export const typedActionsScenario = {
       await page.getByRole("button", { name: "恢复 Product Release", exact: true }).click();
       await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
       const resumePreview = api.actionPreviews.findLast((preview) => preview.action_kind === "goal.lifecycle" && preview.normalized_parameters.operation === "resume");
+      await page.locator('[data-action-review="review"]').filter({ hasText: "恢复自动调度前需要确认" }).waitFor({ state: "visible" });
       if (!resumePreview || resumePreview.normalized_parameters.goal_id !== "product-release") throw new Error("Goal resume did not create the expected typed preview");
       if (api.durableWriteCount !== writesBeforeLifecyclePreview + 1) throw new Error("Goal resume preview wrote state before owner confirmation");
       api.nextLifecycleApplyDelayMs = 900;
@@ -313,7 +369,7 @@ export const typedActionsScenario = {
       await page.getByRole("group", { name: "Goal settings" }).getByRole("button", { name: /Goal details/ }).click();
       await page.getByText("Repository", { exact: true }).waitFor({ state: "visible" });
       await page.getByText("Execution Session", { exact: true }).waitFor({ state: "visible" });
-      await page.getByText("Read only", { exact: true }).waitFor({ state: "visible" });
+      await page.locator(".personal-goal-repository").getByText("Read only", { exact: true }).waitFor({ state: "visible" });
       await page.getByRole("button", { name: /Close details/ }).click();
       const englishGoalNavigation = page.getByRole("navigation", { name: "Goal view" });
       await englishGoalNavigation.getByRole("button", { name: "Chat", exact: true }).click();
@@ -687,7 +743,7 @@ export const typedActionsScenario = {
       const goalCapabilityOrder = await page.locator(".personal-capability-list button strong").allTextContents();
       if (await page.locator(".personal-capability-editor-status").count()) throw new Error("Editable Goal settings must not show internal editor-contract notices");
       const expectedGoalCapabilities = [
-        "变更质量验证", "探索图谱", "探索 Harness", "飞书事件收件箱",
+        "变更质量验证", "Goal 复核周期", "探索图谱", "探索 Harness", "飞书事件收件箱",
         "飞书看板心跳同步", "本地 Authority 影子观测", "自适应子 Agent 容量",
         "已注册 Peer 任务协调", "周期报告", "Reward Memory 实验",
       ];
@@ -791,7 +847,7 @@ export const typedActionsScenario = {
       await page.getByRole("group", { name: "Goal 设置" }).getByRole("button", { name: /Goal 详情/ }).click();
       await page.getByText("仓库", { exact: true }).waitFor({ state: "visible" });
       await page.getByText("执行 Session", { exact: true }).waitFor({ state: "visible" });
-      await page.getByText("只读", { exact: true }).waitFor({ state: "visible" });
+      await page.locator(".personal-goal-repository").getByText("只读", { exact: true }).waitFor({ state: "visible" });
       if (!(await page.getByText("loopx-ai/loopx", { exact: true }).isVisible())) throw new Error("Goal drawer did not show the read-only repository context");
       await page.getByRole("button", { name: /关闭详情/ }).click();
 
@@ -804,8 +860,14 @@ export const typedActionsScenario = {
 
       await page.getByRole("button", { name: /机器配置/ }).click();
       await page.getByRole("heading", { level: 1, name: "机器配置", exact: true }).waitFor({ state: "visible" });
-      await page.getByRole("heading", { level: 2, name: /^周期报告/ }).waitFor({ state: "visible" });
       const machineCatalog = page.getByRole("navigation", { name: "机器能力目录" });
+      const firstMachineCapability = machineCatalog.getByRole("button").filter({ hasText: "机器" }).first();
+      await firstMachineCapability.waitFor({ state: "visible" });
+      const initialMachineTitle = await firstMachineCapability.locator("strong").innerText();
+      await page.getByRole("heading", { level: 2, name: initialMachineTitle, exact: true }).waitFor({ state: "visible" });
+      if (await firstMachineCapability.getAttribute("aria-current") !== "page") {
+        throw new Error("Initial machine selection must follow the visible catalog order, not the API source order");
+      }
       if (await page.locator(".personal-capability-editor-status").count()) throw new Error("Editable machine settings must not show internal editor-contract notices");
       if (await machineCatalog.getByRole("button").count() !== goalCapabilityCatalog().length) {
         throw new Error("Machine settings hid Goal-only capabilities from the shared catalog");
@@ -819,6 +881,15 @@ export const typedActionsScenario = {
           || api.machineConfigurationRequests.length !== requestsBeforeReadOnly) {
         throw new Error("Goal-only capability exposed a machine mutation path");
       }
+      await machineCatalog.getByRole("button", { name: /^Goal 复核周期/ }).click();
+      await page.getByLabel(/^两次 Goal 复核间的已完成 Todo 数/u).waitFor({ state: "visible" });
+      await page.getByText(/不会创建 Turn、消耗配额或授予权限/u).waitFor({ state: "visible" });
+      await machineCatalog.getByRole("button", { name: /^变更质量验证/ }).click();
+      for (const label of [/^启用$/u, /^允许一次有界安全修复$/u, /^要求精确 diff 回执$/u]) {
+        await page.getByLabel(label).waitFor({ state: "visible" });
+      }
+      await page.getByText(/不会授予文件、权限或合并权/u).waitFor({ state: "visible" });
+      await page.screenshot({ path: resolve(outputDir, "machine-default-capabilities-zh-cn.png"), fullPage: false, animations: "disabled" });
       await machineCatalog.getByRole("button", { name: /^周期报告/ }).click();
       for (const label of [/^启用$/u, /^报告 Profile/u, /^Goal Channel 路由/u, /^时区/u]) {
         await page.getByLabel(label).waitFor({ state: "visible" });

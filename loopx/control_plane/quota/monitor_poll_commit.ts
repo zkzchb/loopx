@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { access, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { monitorSuccessorIntent, monitorSuccessorRoute, monitorSuccessorCapabilities } from "../scheduler/monitor_successor.ts";
+import { monitorSuccessorIntent, monitorSuccessorRoute } from "../scheduler/monitor_successor.ts";
+import { normalizeTodoCapabilities } from "../todos/work_requirements.ts";
+import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -641,9 +643,13 @@ function compactProviderWriteback(receipt: JsonObject): JsonObject {
  * Omitted on the legacy path to retain its exact v0 response shape. */
 function monitorProjectionDelivery(receipt: JsonObject): JsonObject {
   if (receipt.projection_delivery == null) return {};
-  const status = optionalString(receipt.projection_delivery, "projection_delivery");
-  if (!["delivered", "pending", "not_required"].includes(String(status))) {
-    throw new EffectRuntimeRequestError("invalid Monitor projection delivery status");
+  let status: ReturnType<typeof parseProjectionDelivery>;
+  try {
+    status = parseProjectionDelivery(receipt.projection_delivery);
+  } catch (error) {
+    throw new EffectRuntimeRequestError(
+      error instanceof Error ? error.message : "invalid Monitor projection delivery status",
+    );
   }
   const outbox = requiredObject(receipt.projection_outbox, "projection_outbox");
   const diagnostic: JsonObject = {};
@@ -868,8 +874,8 @@ function requireProviderCapabilityMatch(
   expected: readonly string[],
   label: string,
 ): void {
-  const actualCapabilities = monitorSuccessorCapabilities(actual, label);
-  const expectedCapabilities = monitorSuccessorCapabilities(expected, label);
+  const actualCapabilities = normalizeTodoCapabilities(actual, label);
+  const expectedCapabilities = normalizeTodoCapabilities(expected, label);
   if (pythonJson(actualCapabilities) !== pythonJson(expectedCapabilities)) {
     throw new EffectRuntimeRequestError(`${label} must match provider plan`);
   }

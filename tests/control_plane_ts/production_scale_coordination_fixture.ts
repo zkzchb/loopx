@@ -23,6 +23,7 @@ const envelope = JSON.parse(readFileSync(new URL(
   linked_decision_count: number;
   completion_target_index: number;
   supersede_target_index: number;
+  semantic_cases: Record<string, Record<string, unknown>>;
 };
 
 export const PRODUCTION_SCALE_FIXTURE_SCHEMA =
@@ -48,6 +49,7 @@ export interface ProductionScaleCoordinationFixture {
   readonly expected_agent_archive_count_after_terminals: number;
   readonly expected_user_archive_count: number;
   readonly expected_standing_user_decision_count: number;
+  readonly semantic_cases: Readonly<Record<string, Record<string, unknown>>>;
 }
 
 function statusSeries(counts: Record<string, number>): string[] {
@@ -88,6 +90,14 @@ function todoRecords(
     };
     if (role === "agent" && status !== "done" && status !== "deferred") {
       record.claimed_by = index % 2 === 0 ? "agent-a" : "agent-b";
+    }
+    if (role === "agent" && record.task_class === "advancement_task") {
+      // Full requirement declarations survive unrelated transitions and archive;
+      // editing a declaration must not change an existing execution grant.
+      Object.assign(record, {action_kind: "implement", task_domain: "code",
+        task_repository: "git:github.com/example/project",
+        required_write_scopes: ["src/**", "tests/**"], required_capabilities: ["code_review"],
+        target_capabilities: ["delivery"], explore_result_node_refs: [`Node:fixture-${index}`]});
     }
     if (record.task_class === "continuous_monitor") {
       // Durable mixed-source observation shapes: bounded and watch-only,
@@ -201,6 +211,7 @@ export function productionScaleCoordinationFixture(
     expected_agent_archive_count_after_terminals: initialAgentDone + 2 - 5,
     expected_user_archive_count: (envelope.user_status_counts.done ?? 0) - 5,
     expected_standing_user_decision_count: envelope.standing_user_decision_count,
+    semantic_cases: envelope.semantic_cases,
   };
 }
 

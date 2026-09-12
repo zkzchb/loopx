@@ -305,7 +305,8 @@ export const typedActionProposalSchema = z.object({
   context: z.record(z.string(), z.unknown()),
   expected_state_fingerprint: z.string().min(1),
   permission_classification: z.string().min(1),
-  validation_evidence: z.array(z.unknown()),
+  // ChatActionService emits textual validation facts for every action kind.
+  validation_evidence: z.array(z.string().refine((value) => value.trim().length > 0, "Validation evidence must be non-blank text")),
   available_transitions: z.array(z.enum(["apply", "cancel", "regenerate", "reject", "defer"])),
   status: z.enum(["preview_ready", "applying", "gated", "failed", "rejected", "deferred", "cancelled", "stale", "applied"]),
   receipt: z.record(z.string(), z.unknown()).nullable(),
@@ -1056,6 +1057,13 @@ export async function configureGoalChannelAutoNotify(options: { autoNotify: bool
   );
 }
 
+export const periodicReportScheduleSchema = z.object({
+  schema_version: z.literal("periodic_report_schedule_v0"),
+  schedule_id: z.string(),
+  rrule: z.string(),
+  timezone: z.string(),
+});
+
 export const periodicReportMachineConfigurationSchema = z.object({
   schema_version: z.literal("periodic_report_machine_defaults_v0"),
   enabled: z.boolean(),
@@ -1063,6 +1071,7 @@ export const periodicReportMachineConfigurationSchema = z.object({
   profile_preset: z.string().optional(),
   route_ref: z.string().optional(),
   timezone: z.string(),
+  schedule: periodicReportScheduleSchema.nullable().optional(),
 });
 
 export const machineConfigurationSchema = z.object({
@@ -1088,7 +1097,8 @@ export const capabilityConfigurationFieldSchema = z.object({
   key: z.string(),
   label: z.string(),
   description: z.string(),
-  input_kind: z.enum(["boolean", "number", "select", "string_list", "text"]),
+  input_kind: z.enum(["boolean", "number", "select", "string_list", "text", "periodic_report_schedule"]),
+  nullable: z.boolean().optional(),
   required: z.boolean(),
   minimum: z.number().int().optional(),
   maximum: z.number().int().optional(),

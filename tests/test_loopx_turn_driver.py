@@ -1094,7 +1094,7 @@ def test_turn_plan_fails_closed_on_action_signature_drift() -> None:
     assert payload["route"]["would_invoke_host"] is False
 
 
-def test_turn_plan_fails_closed_on_oversized_turn_envelope() -> None:
+def test_turn_plan_preserves_route_on_budget_warning() -> None:
     envelope = _envelope()
     envelope["compaction"] = {"within_budget": False}
 
@@ -1104,8 +1104,9 @@ def test_turn_plan_fails_closed_on_oversized_turn_envelope() -> None:
         execution_mode="interactive-visible",
     )
 
-    assert payload["ok"] is False
-    assert payload["route"]["kind"] == LoopXTurnRoute.CONTRACT_ERROR.value
+    assert payload["ok"] is True
+    assert payload["route"]["kind"] == LoopXTurnRoute.READY_FOR_HOST.value
+    assert payload["turn_envelope"]["compaction"]["within_budget"] is False
 
 
 def test_scheduler_followup_binding_preserves_turn_lineage(
@@ -1436,8 +1437,9 @@ def test_heartbeat_cli_codex_app_alias_reaches_generated_quota_guard(
 
     payload = json.loads(output.getvalue())
     assert exit_code == 0, payload
-    assert payload["runtime_profile"] == "codex_app_heartbeat"
-    assert "--codex-app" in payload["quota_guard_command"]
+    assert payload["schema_version"] == "heartbeat_agent_input_v1"
+    assert "runtime_profile" not in payload
+    assert "quota_guard_command" not in payload
     assert "--codex-app" in payload["task_body"]
 
 

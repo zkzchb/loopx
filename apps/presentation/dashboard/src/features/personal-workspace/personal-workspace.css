@@ -728,6 +728,8 @@
 .personal-capability-field-summary { padding: 20px 24px 24px; }
 .personal-capability-field-summary .personal-capability-fields { margin-top: 0; }
 .personal-capability-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 0; border: 0; }
+.personal-report-schedule { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; min-width: 0; }
+.personal-report-schedule p { grid-column: 1 / -1; margin: 0; color: var(--pw-muted); font-size: 12px; overflow-wrap: anywhere; }
 .personal-capability-fields label { display: grid; align-content: start; gap: 6px; min-width: 0; }
 .personal-capability-fields label > span { font-size: 12px; font-weight: 650; }
 .personal-capability-fields input:not([type="checkbox"]), .personal-capability-fields select, .personal-capability-fields textarea { width: 100%; min-width: 0; min-height: 42px; padding: 8px 11px; border: 1px solid var(--pw-line-strong); border-radius: 9px; background: #fff; color: var(--pw-text); font: inherit; font-size: 13px; }
@@ -1666,3 +1668,8 @@
   .personal-lark-tabs { gap: 18px; margin-top: 20px; }
   .personal-settings-card > header, .personal-language-options { padding-right: 15px; padding-left: 15px; }
 }
+
+.personal-goal-acceptance h4 { margin: 16px 0 8px; font-size: 14px; }
+.personal-goal-acceptance .personal-acceptance-observation { border-top: 1px solid var(--color-border, #ebebeb); padding: 8px 0; }
+.personal-goal-acceptance dd, .personal-goal-acceptance p { overflow-wrap: anywhere; }
+.personal-goal-acceptance details { margin-top: 16px; }
