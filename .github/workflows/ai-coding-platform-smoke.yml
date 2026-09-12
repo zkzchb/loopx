@@ -1,0 +1,71 @@
+name: AI-Coding Platform Smoke
+
+on:
+  push:
+    branches: [platform]
+    paths:
+      - "scripts/ai-coding-*.sh"
+      - "loopx/extensions/ai_coding/**"
+      - "skills/ai-coding-qwen-loopx/**"
+      - "tests/extensions/test_ai_coding_*.py"
+      - "apps/presentation/coding-dashboard/**"
+      - ".github/workflows/ai-coding-platform-smoke.yml"
+  pull_request:
+    paths:
+      - "scripts/ai-coding-*.sh"
+      - "loopx/extensions/ai_coding/**"
+      - "skills/ai-coding-qwen-loopx/**"
+      - "tests/extensions/test_ai_coding_*.py"
+      - "apps/presentation/coding-dashboard/**"
+      - ".github/workflows/ai-coding-platform-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  platform-static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate shell syntax
+        run: |
+          bash -n \
+            scripts/ai-coding-bootstrap.sh \
+            scripts/ai-coding-doctor.sh \
+            scripts/ai-coding-project-init.sh \
+            scripts/ai-coding-sync-upstream.sh
+
+      - name: Compile downstream Python modules
+        run: |
+          python -m py_compile \
+            loopx/extensions/ai_coding/qwen_code_adapter.py \
+            loopx/extensions/ai_coding/qwen_code_mcp.py \
+            loopx/extensions/ai_coding/node_inventory.py
+
+      - name: Run focused downstream tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+          python -m pytest -q \
+            tests/extensions/test_ai_coding_qwen_code_adapter.py \
+            tests/extensions/test_ai_coding_node_inventory.py
+
+  coding-dashboard-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Coding Dashboard dependencies
+        run: npm --prefix apps/presentation/coding-dashboard install --no-package-lock
+
+      - name: Build Coding Dashboard
+        run: npm --prefix apps/presentation/coding-dashboard run build
