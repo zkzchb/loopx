@@ -4,34 +4,35 @@ set -euo pipefail
 # Canonical fresh-machine initializer for the AI-Coding platform.
 # Target: Ubuntu 24.04 PDS / PDS-Lab.
 #
-# This script owns MACHINE initialization only. It does not authenticate external
-# services and does not create LoopX Goal/Todo/project state.
+# Machine bootstrap only: creates the gany development identity, /project
+# workspace, stable LoopX 1.0 runtime and coding-tool surfaces. External account
+# authentication and project Goal/Todo state remain explicit follow-up steps.
 
 ROLE="pds"
 DEV_USER="gany"
 PROJECT_ROOT="/project"
 PLATFORM_REPO="https://github.com/zkzchb/loopx.git"
 PLATFORM_BRANCH="platform"
-PLATFORM_ROOT=""
+BASELINE_LABEL="1.0"
 RESET_PASSWORD=0
 SKIP_TOOL_INSTALL=0
 
 usage() {
-  cat <<'EOF'
+  cat <<'USAGE'
 Usage: ai-coding-init.sh [options]
 
 Options:
   --role pds|pds-lab       Node role (default: pds)
   --user USER              Development user (default: gany)
   --project-root PATH      Canonical Git workspace (default: /project)
+  --baseline-label LABEL   Stable baseline label (default: 1.0)
   --reset-password         Prompt to reset the development user's password
   --skip-tool-install      Skip Codex/Qwen/Kiro installers
   -h, --help               Show this help
 
-Run as root (recommended on a freshly reset VPS). The script prompts for the
-new user's Unix password on /dev/tty. It never asks for or stores GitHub, OpenAI,
-Qwen, or Kiro credentials.
-EOF
+Run as root on a freshly reset Ubuntu host. The Unix password for the
+development user is entered interactively on /dev/tty and is never stored.
+USAGE
 }
 
 while [[ $# -gt 0 ]]; do
@@ -39,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --role) ROLE="${2:?missing role}"; shift 2 ;;
     --user) DEV_USER="${2:?missing user}"; shift 2 ;;
     --project-root) PROJECT_ROOT="${2:?missing project root}"; shift 2 ;;
+    --baseline-label) BASELINE_LABEL="${2:?missing baseline label}"; shift 2 ;;
     --reset-password) RESET_PASSWORD=1; shift ;;
     --skip-tool-install) SKIP_TOOL_INSTALL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -51,11 +53,15 @@ if [[ "$ROLE" != "pds" && "$ROLE" != "pds-lab" ]]; then
   exit 2
 fi
 if [[ "$(id -u)" -ne 0 ]]; then
-  echo "Run this initializer as root: sudo bash ..." >&2
+  echo "Run this initializer as root." >&2
   exit 1
 fi
 if [[ ! "$DEV_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
   echo "unsafe development username: $DEV_USER" >&2
+  exit 2
+fi
+if [[ ! "$BASELINE_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "unsafe baseline label: $BASELINE_LABEL" >&2
   exit 2
 fi
 
@@ -67,7 +73,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y \
   sudo ca-certificates curl git git-lfs gh jq unzip xz-utils rsync \
-  build-essential python3 python3-venv python3-pip openssh-client lsof tmux
+  build-essential python3 python3-venv python3-pip python3-pytest \
+  openssh-client lsof tmux
 
 git lfs install --system >/dev/null 2>&1 || true
 
@@ -97,7 +104,7 @@ if [[ "$new_user" == "1" || "$RESET_PASSWORD" == "1" ]]; then
     exit 1
   fi
   echo
-  echo "Set the Unix password for '$DEV_USER'. This password is not stored by the script."
+  echo "Set the Unix password for '$DEV_USER'. This password is not stored."
   passwd "$DEV_USER" </dev/tty >/dev/tty
 fi
 
@@ -107,6 +114,21 @@ install -d -m 0755 -o "$DEV_USER" -g "$DEV_GROUP" "$PROJECT_ROOT/.scratch"
 install -d -m 0755 -o "$DEV_USER" -g "$DEV_GROUP" "$DEV_HOME/.local/bin"
 install -d -m 0755 -o "$DEV_USER" -g "$DEV_GROUP" "$DEV_HOME/.config/ai-coding"
 install -d -m 0755 -o "$DEV_USER" -g "$DEV_GROUP" "$DEV_HOME/.local/share/ai-coding"
+install -d -m 0755 -o "$DEV_USER" -g "$DEV_GROUP" "$DEV_HOME/.local/share/loopx/releases"
+
+# Preserve the cloud/VPS SSH access path without enabling password SSH. If the
+# account that launched bootstrap already has authorized_keys and gany does not,
+# copy that key set with strict ownership/modes.
+ssh_source_home="/root"
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] && id "$SUDO_USER" >/dev/null 2>&1; then
+  ssh_source_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+fi
+if [[ -s "$ssh_source_home/.ssh/authorized_keys" && ! -s "$DEV_HOME/.ssh/authorized_keys" ]]; then
+  log "Copy existing SSH public-key access to $DEV_USER"
+  install -d -m 0700 -o "$DEV_USER" -g "$DEV_GROUP" "$DEV_HOME/.ssh"
+  install -m 0600 -o "$DEV_USER" -g "$DEV_GROUP" \
+    "$ssh_source_home/.ssh/authorized_keys" "$DEV_HOME/.ssh/authorized_keys"
+fi
 
 as_gany() {
   sudo -u "$DEV_USER" -H env \
@@ -126,18 +148,20 @@ as_gany git config --global pull.ff only
 as_gany git config --global fetch.prune true
 as_gany git config --global credential.helper ""
 
-log "Clone/update AI-Coding platform at $PLATFORM_ROOT"
+log "Clone/update AI-Coding development checkout at $PLATFORM_ROOT"
 if [[ ! -d "$PLATFORM_ROOT/.git" ]]; then
-  as_gany git clone --branch "$PLATFORM_BRANCH" --single-branch "$PLATFORM_REPO" "$PLATFORM_ROOT"
+  as_gany git clone --branch "$PLATFORM_BRANCH" "$PLATFORM_REPO" "$PLATFORM_ROOT"
 else
   if [[ -n "$(as_gany git -C "$PLATFORM_ROOT" status --porcelain)" ]]; then
     echo "$PLATFORM_ROOT has local changes; refusing to overwrite it." >&2
     exit 1
   fi
-  as_gany git -C "$PLATFORM_ROOT" fetch origin "$PLATFORM_BRANCH"
-  as_gany git -C "$PLATFORM_ROOT" checkout "$PLATFORM_BRANCH"
-  as_gany git -C "$PLATFORM_ROOT" merge --ff-only "origin/$PLATFORM_BRANCH"
 fi
+as_gany git -C "$PLATFORM_ROOT" fetch origin \
+  +refs/heads/main:refs/remotes/origin/main \
+  +refs/heads/platform:refs/remotes/origin/platform
+as_gany git -C "$PLATFORM_ROOT" checkout "$PLATFORM_BRANCH"
+as_gany git -C "$PLATFORM_ROOT" merge --ff-only "origin/$PLATFORM_BRANCH"
 
 if [[ "$SKIP_TOOL_INSTALL" != "1" ]]; then
   log "Install Codex CLI for $DEV_USER"
@@ -156,60 +180,8 @@ if [[ "$SKIP_TOOL_INSTALL" != "1" ]]; then
   fi
 fi
 
-log "Install LoopX from our additive platform checkout"
-as_gany env \
-  PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-  CODEX_HOME="$DEV_HOME/.codex" \
-  LOOPX_BIN_DIR="$DEV_HOME/.local/bin" \
-  LOOPX_PROMOTE_DEFAULT=1 \
-  LOOPX_INSTALL_SLASH_COMMANDS=0 \
-  bash "$PLATFORM_ROOT/scripts/install-local.sh"
-
-LOOPX_BIN="$DEV_HOME/.local/bin/loopx"
-if [[ ! -x "$LOOPX_BIN" ]]; then
-  echo "LoopX installation did not produce $LOOPX_BIN" >&2
-  exit 1
-fi
-
-log "Install LoopX Codex and Kiro host surfaces"
-as_gany env HOME="$DEV_HOME" PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-  CODEX_HOME="$DEV_HOME/.codex" "$LOOPX_BIN" slash-commands --install --surface codex
-as_gany env HOME="$DEV_HOME" PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-  KIRO_HOME="$DEV_HOME/.kiro" "$LOOPX_BIN" slash-commands --install --surface kiro-cli
-
-log "Install additive LoopX integration for Qwen Code"
-install -d -m 0755 -o "$DEV_USER" -g "$DEV_GROUP" "$DEV_HOME/.qwen/skills/loopx"
-install -m 0644 -o "$DEV_USER" -g "$DEV_GROUP" \
-  "$PLATFORM_ROOT/skills/ai-coding-qwen-loopx/SKILL.md" \
-  "$DEV_HOME/.qwen/skills/loopx/SKILL.md"
-
-QWEN_MCP_VENV="$DEV_HOME/.local/share/ai-coding/qwen-mcp"
-if [[ ! -x "$QWEN_MCP_VENV/bin/python" ]]; then
-  as_gany python3 -m venv "$QWEN_MCP_VENV"
-fi
-as_gany "$QWEN_MCP_VENV/bin/python" -m pip install --upgrade pip
-as_gany "$QWEN_MCP_VENV/bin/python" -m pip install -e "$PLATFORM_ROOT" 'mcp==1.28.1'
-
-QWEN_BIN="$(gany_shell 'command -v qwen || true')"
-if [[ -n "$QWEN_BIN" ]]; then
-  as_gany env HOME="$DEV_HOME" PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-    "$QWEN_BIN" mcp remove --scope user loopx-ai-coding >/dev/null 2>&1 || true
-  as_gany env HOME="$DEV_HOME" PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-    "$QWEN_BIN" mcp add --scope user --transport stdio \
-    --description "LoopX control plane for the AI-Coding Qwen worker lane" \
-    loopx-ai-coding "$QWEN_MCP_VENV/bin/python" -m loopx.extensions.ai_coding.qwen_code_mcp
-else
-  echo "WARNING: qwen is not on PATH; Qwen MCP registration was skipped." >&2
-fi
-
-log "Install both Dashboard dependency trees"
-as_gany env HOME="$DEV_HOME" PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-  npm --prefix "$PLATFORM_ROOT/apps/presentation/dashboard" ci
-as_gany env HOME="$DEV_HOME" PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-  npm --prefix "$PLATFORM_ROOT/apps/presentation/coding-dashboard" install
-
-log "Write canonical node environment and Agent inventory"
-cat >"$DEV_HOME/.config/ai-coding/env.sh" <<EOF
+log "Write canonical node environment"
+cat >"$DEV_HOME/.config/ai-coding/env.sh" <<EOF_ENV
 # Generated by ai-coding-init.sh
 export PATH="$DEV_HOME/.local/bin:\$PATH"
 export AI_CODING_NODE_ROLE="$ROLE"
@@ -218,6 +190,9 @@ export AI_CODING_PROJECT_ROOT="$PROJECT_ROOT"
 export AI_CODING_PROJECTS_ROOT="$PROJECT_ROOT"
 export AI_CODING_SCRATCH_ROOT="$PROJECT_ROOT/.scratch"
 export AI_CODING_PLATFORM_ROOT="$PLATFORM_ROOT"
+export AI_CODING_LOOPX_RELEASES_ROOT="$DEV_HOME/.local/share/loopx/releases"
+export AI_CODING_QWEN_MCP_RELEASES_ROOT="$DEV_HOME/.local/share/ai-coding/qwen-mcp/releases"
+export LOOPX_RELEASES_DIR="$DEV_HOME/.local/share/loopx/releases"
 export AI_CODING_LOOPX_DASHBOARD_HOST="127.0.0.1"
 export AI_CODING_LOOPX_DASHBOARD_PORT="8767"
 export AI_CODING_DASHBOARD_HOST="127.0.0.1"
@@ -225,20 +200,75 @@ export AI_CODING_DASHBOARD_PORT="8768"
 export AI_CODING_QWEN_AGENT_ID="qwen-code"
 export CODEX_HOME="$DEV_HOME/.codex"
 export KIRO_HOME="$DEV_HOME/.kiro"
-EOF
+[ -f "$DEV_HOME/.config/ai-coding/runtime.env" ] && . "$DEV_HOME/.config/ai-coding/runtime.env"
+EOF_ENV
 chown "$DEV_USER:$DEV_GROUP" "$DEV_HOME/.config/ai-coding/env.sh"
 chmod 0644 "$DEV_HOME/.config/ai-coding/env.sh"
 
+cat >"$DEV_HOME/.config/ai-coding/node.env" <<EOF_NODE
+AI_CODING_NODE_ROLE="$ROLE"
+AI_CODING_DEV_USER="$DEV_USER"
+AI_CODING_PROJECT_ROOT="$PROJECT_ROOT"
+EOF_NODE
+chown "$DEV_USER:$DEV_GROUP" "$DEV_HOME/.config/ai-coding/node.env"
+chmod 0644 "$DEV_HOME/.config/ai-coding/node.env"
+
+profile_line='[ -f "$HOME/.config/ai-coding/env.sh" ] && . "$HOME/.config/ai-coding/env.sh"'
+for profile in "$DEV_HOME/.bashrc" "$DEV_HOME/.profile"; do
+  touch "$profile"
+  chown "$DEV_USER:$DEV_GROUP" "$profile"
+  if ! grep -Fqx "$profile_line" "$profile"; then
+    printf '%s\n' "$profile_line" >>"$profile"
+  fi
+done
+
+log "Install immutable LoopX stable baseline from the development checkout"
+source_commit="$(as_gany git -C "$PLATFORM_ROOT" rev-parse HEAD)"
+short_commit="${source_commit:0:12}"
+release_id="ai-coding-${BASELINE_LABEL}-${short_commit}"
+as_gany env \
+  HOME="$DEV_HOME" \
+  PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+  CODEX_HOME="$DEV_HOME/.codex" \
+  LOOPX_BIN_DIR="$DEV_HOME/.local/bin" \
+  LOOPX_RELEASES_DIR="$DEV_HOME/.local/share/loopx/releases" \
+  LOOPX_RELEASE_ID="$release_id" \
+  LOOPX_PROMOTE_DEFAULT=1 \
+  LOOPX_INSTALL_SLASH_COMMANDS=0 \
+  bash "$PLATFORM_ROOT/scripts/install-local.sh"
+
+loopx_target="$(readlink -f "$DEV_HOME/.local/bin/loopx" 2>/dev/null || true)"
+if [[ -z "$loopx_target" || "$loopx_target" != */scripts/loopx ]]; then
+  echo "Unable to resolve promoted LoopX stable runtime." >&2
+  exit 1
+fi
+ACTIVE_RELEASE="$(dirname "$(dirname "$loopx_target")")"
+if [[ ! -x "$ACTIVE_RELEASE/scripts/ai-coding-bind-runtime.sh" ]]; then
+  echo "Stable release is missing AI-Coding runtime binder." >&2
+  exit 1
+fi
+
+log "Bind Codex/Kiro/Qwen/helper surfaces to the stable release"
+gany_shell "'$ACTIVE_RELEASE/scripts/ai-coding-bind-runtime.sh' --release '$ACTIVE_RELEASE'"
+
+log "Install both Dashboard dependency trees for development/validation"
+as_gany env HOME="$DEV_HOME" PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+  npm --prefix "$PLATFORM_ROOT/apps/presentation/dashboard" ci
+as_gany env HOME="$DEV_HOME" PATH="$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+  npm --prefix "$PLATFORM_ROOT/apps/presentation/coding-dashboard" install
+
+log "Write canonical Agent inventory"
 codex_bin="$(gany_shell 'command -v codex || true')"
 qwen_bin="$(gany_shell 'command -v qwen || true')"
 kiro_bin="$(gany_shell 'command -v kiro-cli || true')"
-cat >"$DEV_HOME/.config/ai-coding/agents.json" <<EOF
+cat >"$DEV_HOME/.config/ai-coding/agents.json" <<EOF_AGENTS
 {
   "schema_version": "ai_coding_node_agents_v0",
   "node_role": "$ROLE",
   "development_user": "$DEV_USER",
   "project_root": "$PROJECT_ROOT",
   "platform_root": "$PLATFORM_ROOT",
+  "stable_loopx_release": "$ACTIVE_RELEASE",
   "agents": {
     "codex": {
       "binary": "$codex_bin",
@@ -262,48 +292,39 @@ cat >"$DEV_HOME/.config/ai-coding/agents.json" <<EOF
     }
   }
 }
-EOF
+EOF_AGENTS
 chown "$DEV_USER:$DEV_GROUP" "$DEV_HOME/.config/ai-coding/agents.json"
 chmod 0644 "$DEV_HOME/.config/ai-coding/agents.json"
 
-profile_line='[ -f "$HOME/.config/ai-coding/env.sh" ] && . "$HOME/.config/ai-coding/env.sh"'
-for profile in "$DEV_HOME/.bashrc" "$DEV_HOME/.profile"; do
-  touch "$profile"
-  chown "$DEV_USER:$DEV_GROUP" "$profile"
-  if ! grep -Fqx "$profile_line" "$profile"; then
-    printf '%s\n' "$profile_line" >>"$profile"
-  fi
-done
-
-ln -sfn "$PLATFORM_ROOT/scripts/ai-coding-doctor.sh" "$DEV_HOME/.local/bin/ai-coding-doctor"
-chown -h "$DEV_USER:$DEV_GROUP" "$DEV_HOME/.local/bin/ai-coding-doctor"
-
 log "Machine initialization complete"
 printf '%s\n' \
-  "role:             $ROLE" \
-  "development user: $DEV_USER" \
-  "home:             $DEV_HOME" \
-  "Git workspace:    $PROJECT_ROOT" \
-  "LoopX platform:   $PLATFORM_ROOT" \
-  "sudo:             enabled (password required)" \
-  "GitHub CLI:        $(command -v gh)"
+  "role:              $ROLE" \
+  "development user:  $DEV_USER" \
+  "Git workspace:     $PROJECT_ROOT" \
+  "development LoopX: $PLATFORM_ROOT" \
+  "stable LoopX:      $ACTIVE_RELEASE" \
+  "sudo:              enabled (password required)" \
+  "GitHub CLI:         $(command -v gh)"
 
-cat <<EOF
+cat <<EOF_NEXT
 
-Next, log in as the development user:
+Next:
   su - $DEV_USER
 
-Then complete interactive account authentication:
+Authenticate interactively as $DEV_USER:
   gh auth login
   codex login
   qwen
   kiro-cli
 
-Finally run:
+Then verify:
   ai-coding-doctor
+  ai-coding-loopx status
 
-All future Git repositories should be cloned under:
+All future Git repositories belong under:
   $PROJECT_ROOT/<repository-name>
 
-The initializer deliberately did NOT create any LoopX Goal/Todo/Agent project state.
-EOF
+The development checkout at $PLATFORM_ROOT is NOT the stable runtime. Editing it
+will not change the active LoopX/Qwen MCP/doctor surfaces until an explicit
+validate + promote cycle succeeds.
+EOF_NEXT
