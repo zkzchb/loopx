@@ -1,26 +1,36 @@
 # Standard node layout
 
-The AI-Coding platform uses the same filesystem layout on PDS and PDS-Lab.
-Only the node role and default project root differ.
+PDS and PDS-Lab use the same filesystem layout. The machines differ only by
+`AI_CODING_NODE_ROLE`; they do not use different source-code roots.
 
 ```text
-/opt/ai-coding/loopx/                 downstream LoopX platform checkout
-/srv/ai-coding/projects/              PDS formal project workspace
-/srv/ai-coding/lab-projects/          PDS-Lab experimental project workspace
-/srv/ai-coding/scratch/               disposable smoke/tests
+/project/                            canonical Git workspace owned by gany
+/project/loopx/                      downstream LoopX platform checkout
+/project/<repository-name>/          product and tool repositories
+/project/.scratch/                   disposable smoke/test workspaces
 
-~/.local/bin/                         loopx/codex/qwen/kiro-cli + helpers
-~/.config/ai-coding/env.sh            shell environment
-~/.config/ai-coding/node.env          machine role/path facts
-~/.config/ai-coding/agents.json       agent inventory for platform consumers
-~/.local/share/ai-coding/qwen-mcp/    isolated Qwen MCP Python runtime
+/home/gany/.local/bin/               loopx/codex/qwen/kiro-cli + helpers
+/home/gany/.config/ai-coding/env.sh  shell environment and canonical paths
+/home/gany/.config/ai-coding/agents.json
+                                     machine Agent inventory
+/home/gany/.local/share/ai-coding/qwen-mcp/
+                                     isolated Qwen MCP Python runtime
 
-~/.codex/                             Codex host state/skills
-~/.kiro/                              Kiro host state/skills
-~/.qwen/                              Qwen state, skills, user MCP settings
+/home/gany/.codex/                   Codex host state/skills
+/home/gany/.kiro/                    Kiro host state/skills
+/home/gany/.qwen/                    Qwen state, skills, user MCP settings
 ```
 
-The layout is intentionally boring: stable paths are more valuable than clever
-autodiscovery on disposable/rebuilt servers. Platform code should prefer the
-canonical inventory files and environment variables, then fall back to PATH
-probing for diagnostics.
+`gany` is the shared software-development identity on both servers and belongs
+to the `sudo` group. Sudo remains password-protected.
+
+The layout is intentionally simple. Stable paths are more valuable than clever
+autodiscovery on disposable/rebuilt servers. Platform code should read
+`~/.config/ai-coding/agents.json` and the exported environment first, and only
+fall back to PATH probing for diagnostics.
+
+All Git repositories used for development belong under `/project`; do not spread
+working checkouts across `/opt`, `/srv`, `/root`, or individual temporary home
+directories. System services may still use standard system paths when a project
+is later deployed, but deployment/runtime paths are separate from source-code
+workspace paths.
