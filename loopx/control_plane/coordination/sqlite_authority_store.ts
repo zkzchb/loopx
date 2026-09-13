@@ -1,3 +1,4 @@
+import {AuthorityJournalScan} from "./authority_journal_scan.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -9,7 +10,7 @@ import type { AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult, 
   AuthorityStoreReceiptResult, AuthorityStoreScanResult } from "./authority_store.ts";
 import { AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthorityObject,
   canonicalAuthorityObjectList, canonicalAuthoritySha256, normalizeAuthorityStoreCommit,
-  parseAuthorityCursor, requireAuthorityStoreId } from "./authority_store_codec.ts";
+  requireAuthorityStoreId } from "./authority_store_codec.ts";
 
 const SCHEMA = "loopx_sqlite_authority_store_v0";
 const IDENTITY = /^sqlite:[0-9a-f]{32}$/;
@@ -23,7 +24,7 @@ function sqliteDriver(): typeof import("node:sqlite") {
   if (qualifiedSqlite) return qualifiedSqlite;
   let sqlite: typeof import("node:sqlite");
   try { sqlite = require("node:sqlite") as typeof import("node:sqlite"); }
-  catch { return protocol("SQLite authority requires a qualified node:sqlite runtime (Node 22.14 or newer recommended)"); }
+  catch { return protocol("SQLite authority requires a qualified node:sqlite runtime (Node 22.18.0 or newer)"); }
   // Early experimental drivers defer statement finalization until GC, leaving
   // closed file handles locked on Windows. Probe in memory before touching any
   // authority path; never force GC or hide the leak with cleanup retries.
@@ -33,7 +34,7 @@ function sqliteDriver(): typeof import("node:sqlite") {
   let finalized = false;
   try { statement.get(); }
   catch (error) { finalized = (error as NodeJS.ErrnoException).code === "ERR_INVALID_STATE"; }
-  if (!finalized) protocol("SQLite authority requires synchronous statement finalization on close; use Node 22.14 or newer. File authority still supports Node 22.6");
+  if (!finalized) protocol("SQLite authority requires synchronous statement finalization on close; use Node 22.18.0 or newer");
   qualifiedSqlite = sqlite;
   return sqlite;
 }
@@ -260,27 +261,21 @@ export class SqliteAuthorityStore implements AuthorityStore {
   }
 
   async scanCommitted(afterCursor: string | null, limit: number): Promise<AuthorityStoreScanResult> {
-    let offset: bigint;
-    try {
-      offset = parseAuthorityCursor(afterCursor);
-      if (!Number.isSafeInteger(limit) || limit < 1) protocol("Scan limit must be a positive safe integer");
-    } catch (error) { return {status: "failed", reason_code: "invalid_scan_request",
-      reason: error instanceof Error ? error.message : "Invalid scan request"}; }
+    const scan = AuthorityJournalScan.prepare(afterCursor, limit);
+    if (!(scan instanceof AuthorityJournalScan)) return scan;
     let db: DatabaseSync | null = null;
     try {
       db = this.open(false);
-      if (!db) return {status: "page", transactions: [], next_cursor: afterCursor, has_more: false};
+      if (!db) return scan.page([], null);
       db.exec("BEGIN");
       const identity = this.identity(db);
-      const head = BigInt(this.current(db)?.cursor ?? "0");
-      if (offset > head) return {status: "failed", reason_code: "scan_cursor_out_of_range", reason: "Scan cursor is ahead of the provider head"};
+      const current = this.current(db);
+      const range = scan.rangeFailure(current?.cursor ?? null);
+      if (range) return range;
       const rows = db.prepare(`SELECT ${ROW_COLUMNS} FROM commits WHERE cursor > ? ORDER BY cursor LIMIT ?`);
-      const result = rows.all(offset, BigInt(limit) + 1n);
-      // Validate the lookahead row too: it is evidence for has_more.
-      const verified = result.map(row => this.transaction(row, identity));
-      const transactions = verified.slice(0, limit);
-      return {status: "page", transactions, next_cursor: transactions.at(-1)?.cursor ?? afterCursor,
-        has_more: result.length > limit};
+      const verified = rows.all(scan.offset, BigInt(limit) + 1n).map(row => this.transaction(row, identity));
+      return scan.page(verified, current ? {cursor: current.cursor,
+        provider_revision: current.provider_revision, head: current.projection} : null);
     } catch (error) { return readFailure(error); }
     finally { db?.close(); }
   }

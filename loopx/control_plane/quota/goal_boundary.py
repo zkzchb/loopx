@@ -194,6 +194,32 @@ def _registry_boundary_projection(goal: Mapping[str, Any]) -> dict[str, Any]:
     return boundary
 
 
+def _reward_memory_enablement_projection(
+    status: Mapping[str, Any],
+) -> dict[str, Any]:
+    fields = (
+        "isolation_mode",
+        "enablement_receipt_status",
+        "actor_binding_verified",
+        "writability_verified",
+        "exact_readback_verified",
+    )
+    return {field: status[field] for field in fields if field in status}
+
+
+def _reward_memory_automation_projection(
+    status: Mapping[str, Any],
+) -> dict[str, Any]:
+    automation_intent = status.get("automation_intent")
+    host_coverage = status.get("host_coverage")
+    return {
+        "automation_intent": (
+            dict(automation_intent) if isinstance(automation_intent, Mapping) else {}
+        ),
+        "host_coverage": list(host_coverage) if isinstance(host_coverage, list) else [],
+    }
+
+
 def goal_boundary(
     goal: dict[str, Any],
     item: dict[str, Any] | None = None,
@@ -342,7 +368,13 @@ def goal_boundary(
                     "automation_projection_source": (
                         "reward_memory_experiment_status_v1"
                     ),
+                    **_reward_memory_automation_projection(
+                        reward_memory_experiment_status
+                    ),
                 }
+            )
+            reward_capability.update(
+                _reward_memory_enablement_projection(reward_memory_experiment_status)
             )
             if reward_memory_experiment_status.get("config_schema_version"):
                 reward_capability["config_schema_version"] = str(
@@ -465,22 +497,4 @@ def declared_available_capabilities(source: Any) -> list[str]:
         else {}
     )
     append(project_asset.get("available_capabilities"))
-    return capabilities
-
-
-def effective_available_capabilities(
-    runtime_available_capabilities: Any,
-    *,
-    item: dict[str, Any],
-    project_asset: dict[str, Any],
-) -> list[str]:
-    capabilities: list[str] = []
-    for raw in (
-        declared_available_capabilities(item),
-        declared_available_capabilities(project_asset),
-        runtime_available_capabilities,
-    ):
-        for capability in normalize_required_capabilities(raw):
-            if capability not in capabilities:
-                capabilities.append(capability)
     return capabilities

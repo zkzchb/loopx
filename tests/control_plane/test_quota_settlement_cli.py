@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 
@@ -606,6 +607,150 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     assert _spend_run_count(runtime) == 1
 
 
+def test_codex_app_refresh_stages_validated_memory_and_spend_finalizes_hook(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    validator = project / "validate_reward_memory.py"
+    validator.write_text(
+        "import json, sys\n"
+        "text = sys.stdin.read()\n"
+        "if text:\n"
+        "  request = json.loads(text)\n"
+        "  print(json.dumps({\n"
+        "    'schema_version': 'reward_memory_reflection_validation_v0',\n"
+        "    'status': 'validated',\n"
+        "    'reflection_digest': request['reflection_digest'],\n"
+        "    'evidence_refs': request['reflection']['evidence_refs'],\n"
+        "  }))\n",
+        encoding="utf-8",
+    )
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    validation_argv = quote(
+        json.dumps([sys.executable, str(validator)], separators=(",", ":")),
+        safe="",
+    )
+    state_path.write_text(
+        state_text.replace(
+            "action_kind=validate -->",
+            "action_kind=validate "
+            f"validation_command_argv={validation_argv} "
+            "validation_label=reward-memory-app-fixture -->",
+        ),
+        encoding="utf-8",
+    )
+    turn_id = "turn-reward-memory-app"
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_id,
+    )
+    reflection = json.dumps(
+        {
+            "schema_version": "turn_reward_memory_reflection_v0",
+            "status": "eligible",
+            "surface_id": "agent_workflow.turn_admission",
+            "outcome_kind": "engineering",
+            "content_summary": "Reuse the exact settlement identity on retries.",
+            "reasoning_summary": "The declared validator covered the bound outcome.",
+            "confidence": "high",
+            "evidence_refs": ["artifact:app-settlement", "receipt:validator"],
+        },
+        separators=(",", ":"),
+    )
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--scan-path",
+        str(project),
+        cwd=project,
+    )
+    assert guard_rc == 0, guard
+
+    complete_rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "reward memory app fixture validated",
+        "--next-agent-todo",
+        "Continue after the reward memory fixture.",
+        "--next-claimed-by",
+        AGENT_ID,
+        "--next-action-kind",
+        "implement",
+        cwd=project,
+    )
+    assert complete_rc == 0, complete
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "reward_memory_app_progress",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--reward-memory-reflection-json",
+        reflection,
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=project,
+    )
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    candidate = refresh["reward_memory_outcome_candidate"]
+    assert candidate["status"] == "validation_bound"
+    assert candidate["validation_bound"] is True
+    assert candidate["raw_content_projected"] is False
+    assert "content_summary" not in json.dumps(candidate)
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+        "--scan-path",
+        str(project),
+        cwd=project,
+    )
+    assert spend_rc == 0, spend
+    assert spend["settlement_result"]["ok"] is True
+    assert spend["reward_memory_ingest"]["host_wiring"] == (
+        "codex_app_refresh_spend_post_settlement"
+    )
+    assert spend["reward_memory_ingest"]["external_writes_performed"] is False
+
+
 def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
     tmp_path: Path,
 ) -> None:
@@ -803,6 +948,27 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
         "in_flight_continuation"
     )
 
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        first_turn_id,
+    )
+    assert spend_rc == 0, spend
+
     second_guard_rc, second_guard = _run_cli(
         registry_path,
         runtime,
@@ -865,6 +1031,150 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
         "triggers": [{"kind": "in_flight_continuation", "todo_id": TODO_ID}],
         "delivery_boundary": "in_flight_continuation",
     }
+
+
+def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _append_newly_due_monitor(project)
+    prior_turn_id = "turn-unsettled-prior"
+
+    prior_rc, prior = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        TODO_ID,
+        "--scan-path",
+        str(project),
+    )
+    assert prior_rc == 0, prior
+    assert prior["heartbeat_receipt"]["closeout_required"] is True
+
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_before_replan = state_path.read_text(encoding="utf-8")
+    replan_backlog = "\n".join(
+        f"- [ ] [P1] Review recovery breadth {index}.\n"
+        "  <!-- loopx:todo "
+        f"todo_id=todo_recovery_replan_{index:012d} status=open "
+        "task_class=advancement_task action_kind=validate "
+        f"claimed_by={AGENT_ID} -->"
+        for index in range(15)
+    )
+    state_path.write_text(
+        state_before_replan.rstrip() + "\n\n" + replan_backlog + "\n",
+        encoding="utf-8",
+    )
+
+    recovery_rc, recovery = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+        "--scan-path",
+        str(project),
+    )
+    assert recovery_rc == 0, recovery
+    assert recovery["effective_action"] == "unsettled_host_turn_recovery"
+    replan_obligation_id = recovery["replan_action_packet"]["obligation_id"]
+    packet = recovery["unsettled_host_turn_recovery"]
+    assert packet["prior_turn_instance_id"] == prior_turn_id
+    assert packet["binding_id"] == TODO_ID
+    assert packet["missing_receipts"] == [
+        "durable_writeback_receipt",
+        "quota_spend_receipt",
+    ]
+    assert "selected_todo" not in recovery
+    contract = recovery["interaction_contract"]
+    assert contract["mode"] == "unsettled_host_turn_recovery"
+    assert contract["agent_channel"]["must_attempt"] is True
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    assert contract["agent_channel"]["quiet_noop_allowed"] is False
+    assert contract["agent_channel"]["primary_action"] == recovery[
+        "recommended_action"
+    ]
+    assert contract["agent_channel"]["recovery_ref"] == (
+        "$.unsettled_host_turn_recovery"
+    )
+    assert contract["cli_channel"]["spend_after_validation"] is False
+    assert "monitor_changed:<monitor-todo-id>" in contract["cli_channel"][
+        "next_cli_actions"
+    ][1]
+    assert "settlement_identity" not in recovery["heartbeat_receipt"]
+    assert recovery["heartbeat_receipt"]["semantic_replan_obligation_id"] == (
+        replan_obligation_id
+    )
+
+    # Model the separately verified replan settlement without touching the
+    # append-only heartbeat receipt.  The same recovery Turn must then be able
+    # to bind an independent successor instead of preserving an obsolete replan.
+    state_path.write_text(state_before_replan, encoding="utf-8")
+
+    wait_rc, wait = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "update",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--status",
+        "open",
+        "--resume-when",
+        f"monitor_changed:{DUE_MONITOR_TODO_ID}",
+        "--successor-todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+    assert wait_rc == 0, wait
+    assert wait["external_wait_transition"]["successor_todo_ids"] == [
+        ALTERNATIVE_TODO_ID
+    ]
+
+    current_turn_id = recovery["heartbeat_receipt"]["turn_instance_id"]
+    resumed_rc, resumed = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        current_turn_id,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--scan-path",
+        str(project),
+    )
+    assert resumed_rc == 0, resumed
+    assert resumed["effective_action"] != "unsettled_host_turn_recovery"
+    assert resumed.get("autonomous_replan_obligation") is None
+    assert resumed["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert resumed["heartbeat_receipt"]["status"] == "upgraded"
+    assert resumed["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        ALTERNATIVE_TODO_ID
+    )
 
 
 def test_standard_codex_app_settlement_is_receipted_and_idempotent(
@@ -1583,15 +1893,16 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
+@pytest.mark.parametrize("fallback_available", [False, True])
 def test_visible_goal_capability_reentry_preserves_turn_through_selection(
-    tmp_path: Path,
+    tmp_path: Path, fallback_available: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(
         tmp_path,
-        required_capability="network",
+        required_capability=None if fallback_available else "network",
     )
     _configure_runtime_capability_reentry_fixture(project)
-    _configure_selectable_alternative(project, required_capability="network")
+    _configure_selectable_alternative(project, required_capability=None if fallback_available else "network")
     prompt = build_heartbeat_prompt(
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
@@ -1610,6 +1921,11 @@ def test_visible_goal_capability_reentry_preserves_turn_through_selection(
 
     assert first_rc == 0, first
     turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
+    if fallback_available:
+        assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
+        assert first["selected_todo"]["todo_id"] == TODO_ID
+        assert first["interaction_contract"]["agent_channel"]["next_task_action"]["kind"] == "capability_verification"
+        assert first["interaction_contract"]["cli_channel"]["next_cli_actions"][0] == first["runtime_capability_reentry"]["candidates"][0]["command"]
     reentry_command = first["runtime_capability_reentry"]["candidates"][0][
         "command"
     ]
@@ -3433,7 +3749,9 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
         *capability_args,
     )
     assert next_turn_rc == 0, next_turn
-    assert next_turn["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
+    assert next_turn["effective_action"] == "unsettled_host_turn_recovery"
+    assert next_turn["unsettled_host_turn_recovery"]["binding_id"] == TODO_ID
+    assert "selected_todo" not in next_turn
 
     binding = (
         "--agent-id",
@@ -3520,6 +3838,25 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
     assert spend_replay["idempotent_replay"] is True
     assert spend_replay["appended"] is False
     assert _spend_run_count(runtime) == 1
+
+    resumed_turn_rc, resumed_turn = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        "turn-settlement-cli-2",
+        "--scan-path",
+        str(project),
+        *capability_args,
+    )
+    assert resumed_turn_rc == 0, resumed_turn
+    assert resumed_turn["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
 
 
 def test_read_only_settlement_omits_non_causal_delivery_workspace(

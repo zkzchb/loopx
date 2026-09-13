@@ -24,8 +24,8 @@ loopx reward-memory ingest-event --input full-public-fixture.json --format json
 
 ## 实验能力的开启方式
 
-Reward Memory 是 provider-neutral、默认关闭的 goal 级实验能力。它按已登记 agent lane
-显式开启，而不是对整套 LoopX 全局开启：
+Reward Memory 是 provider-neutral、默认关闭的实验能力。它按某个 Goal 内已登记的具体
+Agent 显式开启，而不是对整个 Goal 或整套 LoopX 开启：
 
 ```bash
 # 先 preview；确认边界变化后再追加 --execute。
@@ -37,10 +37,43 @@ loopx reward-memory experiment-status \
   --goal-id <goal> --agent-id <registered-agent> --format json
 ```
 
-Registry 只保存 `enabled`、`experimental`、一个指向 repo 内 ignored config 的相对路径，
-以及显式 agent allowlist，因此 provider 选择留在本地私有配置里。OpenViking 是 Issue Fix
-pilot 当前使用的首个 provider，但不是 LoopX 的全局 feature flag 或强制依赖；任何满足
-同一 binding contract 的 provider 都可以替换它。
+Registry 只保存 `enabled`、`experimental`、指向 repo 内 ignored config 的相对路径及其
+digest、显式 Agent allowlist，以及 public-safe 的逐 Agent 启用回执，因此 provider 选择仍
+留在本地私有配置里。verified 回执证明精确路由完成了一次新的、不可召回的 canary 写入，
+并精确读回相同字节。回执缺失或 config digest 漂移时，自动能力不可用，但不会阻塞 Goal
+的普通工作。OpenViking 是 Issue Fix pilot 当前使用的首个 provider，但不是 LoopX 的全局
+feature flag 或强制依赖；任何满足同一 binding contract 的 provider 都可以替换它。
+
+### OpenViking v0.4.19 身份边界
+
+LoopX 当前假设一个 Agent 只属于一个 Goal，而一个 Goal 可以包含多个 Agent。Agent 名字只在
+Goal 内唯一，因此持久运行时身份是 `(goal_id, agent_id)`；LoopX 会从这两个值生成确定性的、
+符合 OpenViking 规范的 peer token。另一个 Goal 即使也有名为 `explorer` 的 Agent，也会得到
+不同的 peer token，即使二者使用同一个经过认证的 OpenViking user。
+
+新的私有写入只能使用
+`viking://user/{user_id}/peers/{canonical_peer}/memories/...`；请求中的
+`actor_peer_id` 必须在任何 provider 调用前与 URI 中的 peer 完全相等。LoopX 禁止向
+`viking://agent/...` 写 Reward Memory，因为 OpenViking v0.4.19 把持久 memory 放在当前
+User 或 actor-bound Peer namespace 下；Agent scope 不是逐 peer 的持久 memory 根。Agent
+私有 corpus 也不能使用缺少 actor-bound peer 的 user-private 路径。私有 peer
+读写要求当前代 CLI（`>=0.4.18`）和 server（`>=0.4.19`）。参见 OpenViking 的
+[多租户模型](https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/11-multi-tenant.md)
+和 [Context 类型说明](https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/02-context-types.md)。
+
+Config v1 的一份私有配置只能绑定一个 Goal-scoped Agent；把多个 Agent 交给同一个私有
+provider binding 会被拒绝，不能静默共用 peer。Account/public resources 仍是显式共享模式。
+未来如果增加同 Goal 的 `goal_shared` memory，必须作为独立 corpus，拥有独立 owner、读取
+allowlist、写入/晋升策略和回执；运行时再显式合并 Agent 私有与 Goal 共享两个 corpus。
+不能因为两个 Agent 同属一个 Goal，就把某个 Agent 的私有 memory 自动晋升或暴露给兄弟 Agent。
+
+### 生命周期完成边界
+
+Provider 就绪和生命周期自动化是两个独立状态。存储启用回执已验证，并不代表每个宿主都已经
+接好自动召回和写回。完整生命周期开启意味着：适用的真实规划/决策入口执行有界召回；真实、
+有证据的结果复盘执行幂等写回，不再依赖另一个隐藏开关。没有新证据就不产生新 memory；缺少
+身份时绝不回退共享 corpus；provider 降级应清晰可见，同时不阻塞 Goal 的基础工作。每个宿主
+必须报告自身真实覆盖范围，不能把一次直接 CLI 或 helper 测试泛化成全宿主可用。
 
 Config v1 只登记一次 `project_provider_binding`，同时列出每个 corpus 的精确 provider
 scope、项目 corpus 集合、模块自有 surface 和 automation policy。每个 surface 显式列出
@@ -77,14 +110,18 @@ authority、privacy、freshness 和 lifecycle；每个 corpus 的 scope digest�
     }
   ],
   "automation": {
-    "automatic_recall": false,
-    "automatic_ingest": false,
+    "automatic_recall": true,
+    "automatic_ingest": true,
     "fail_open": true
   }
 }
 ```
 
-上例省略的 corpus 和 standing policy 字段仍使用既有完整记录 contract。
+上例省略的 corpus 和 standing policy 字段仍使用既有完整记录 contract。这里的 `true` 展示
+新启用默认值；显式 `false` 仍是逐 hook 支持的关闭方式。
+`configure-goal` 的 preview 现在会调用 provider preflight，并返回 `preflight_ready`、
+`preflight_incomplete` 或 `unavailable`，不会再把 provider 写入标成 `planned`。Preview
+本身不证明可写；apply 必须完成新的 canary 写入和精确读回后，才能提交 Registry binding。
 `experiment-status` 会报告 v1 config schema、corpus/surface 数量、recall profile id 和生效的
 automatic policy，但不会泄露 scope ref。Agent-scoped `quota should-run` 与
 `status --agent-id` 使用同一个 invoked registry 和 config reader 解析该 policy，不会把
@@ -104,8 +141,33 @@ artifact 校验和推理回调仍由模块提供。Hook 按配置的 corpus 顺�
 corpus。精确 actor/project/surface/action scope 仍由 adapter 和 standing policy 校验；通用
 hook 只复用确定性的 candidate identity、activation、provider sync、精确读回与 ingest
 receipt。它不采集聊天、不解析 tool log、不保存 raw content，也不推导新 authority；重复
-事件保持幂等。两个 flag 默认都是 false；显式 `ingest-event` 命令继续是调用方主动路径，
-不是旧配置兼容 fallback。
+事件保持幂等。新启用的 v1 config 若省略任一 automation 字段，该字段默认取 `true`；显式
+`false` 始终保持关闭，并以 `explicit` intent provenance 投影。已有的 false 不会被静默重释。
+显式 `ingest-event` 命令继续是调用方主动路径，不是旧配置兼容 fallback。
+
+生产 Codex CLI Turn 在 quota/Todo admission 后执行 recall；只有独立验证、持久 writeback 与
+quota settlement 均完成后，才接受 outcome ingest。Reflection 必须使用
+`turn_reward_memory_reflection_v0`，携带精确配置的 surface、相互区分的
+research/simulation/real/engineering 来源类型和 opaque evidence refs；普通 Turn summary 不算
+证据。Provider commit 含糊或精确读回失败时，会保留一份权限为 0600、按 Goal+Agent+事件隔离的
+sidecar。下一个执行 Turn 会在 recall 前以同一 deterministic event 重试，使 Provider 可以去重，
+LoopX 再要求精确读回。显式关闭会停止 reconciliation，并保持零 Provider 调用。
+
+Codex App 复用同一结算边界，但不会把原始 reflection 放入 run index、rollout event 或公共
+projection。Todo-bound 的 accountable refresh 可以追加
+`--reward-memory-reflection-json <turn_reward_memory_reflection_v0 JSON>`；LoopX 只把候选存入
+权限为 0600、按 Goal+Agent+candidate 隔离的 sidecar，并运行该 Todo 已声明的精确 completion
+validation 命令。Validator 必须返回 `reward_memory_reflection_validation_v0`，且其中的 reflection
+digest 与 evidence refs 必须完全匹配；普通验收命令仅仅退出 0 并不足够。随后只有同一 identity
+的 `quota spend-slot --execute` 对 refresh/writeback 与 spend 做完精确读回，才会 finalize ingest。
+缺少签认、验收失败或只通过普通验收时，候选保持 `awaiting_evidence_validation`，Provider 调用数
+为零。这个 App 生命周期不需要再单独运行手工 `reward-memory ingest-event`。DSH 当前只携带 recall
+context，仍不宣称拥有这条 post-settlement ingest 边界。
+
+Dashboard、CLI/status 与 Lark projection 复用同一个 capability owner 和公共回执。Dashboard
+只通过既有 preview/apply/readback 事务写 ignored config pointer 与已登记的 Goal-local Agent
+allowlist；读取时只返回 opaque binding revision、生效 automation 和 intent provenance，绝不
+回传本机私有路径或 Provider scope。
 
 Allowlist 内的 agent 在运行时只提交紧凑事件：
 

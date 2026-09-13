@@ -29,8 +29,9 @@ loopx reward-memory ingest-event --input full-public-fixture.json --format json
 
 ## Experimental activation
 
-Reward Memory is a provider-neutral, default-off experimental goal capability.
-It is enabled for named registered agent lanes, not for a whole LoopX install:
+Reward Memory is a provider-neutral, default-off experimental capability. It is
+enabled for a named Agent inside one Goal, not for a whole Goal or LoopX
+install:
 
 ```bash
 # Preview first; add --execute only after checking the boundary change.
@@ -42,11 +43,56 @@ loopx reward-memory experiment-status \
   --goal-id <goal> --agent-id <registered-agent> --format json
 ```
 
-The registry retains only `enabled`, `experimental`, an ignored repo-relative
-config pointer, and the explicit agent allowlist. Provider-specific choices
-therefore stay local and private. OpenViking is the first provider used by the
-Issue Fix pilot, but it is not a global LoopX feature flag or mandatory
-dependency; another provider can satisfy the same binding contract.
+The registry retains `enabled`, `experimental`, an ignored repo-relative config
+pointer and digest, the explicit Agent allowlist, and a public-safe per-Agent
+enablement receipt. Provider-specific choices stay local and private. A
+verified receipt proves that the exact route accepted a fresh non-recallable
+canary write and returned the same bytes. A missing receipt or config digest
+drift makes automatic use unavailable without blocking ordinary Goal work.
+OpenViking is the first provider used by the Issue Fix pilot, but it is not a
+global LoopX feature flag or mandatory dependency; another provider can
+satisfy the same binding contract.
+
+### OpenViking v0.4.19 identity boundary
+
+LoopX currently assumes one Agent belongs to exactly one Goal, while a Goal may
+contain several Agents. Agent names are only Goal-local. The durable runtime
+identity is therefore `(goal_id, agent_id)`, and LoopX derives a deterministic,
+OpenViking-safe peer token from that pair. Reusing `explorer` in another Goal
+produces another peer token, even when both routes use the same authenticated
+OpenViking user.
+
+New private writes must use
+`viking://user/{user_id}/peers/{canonical_peer}/memories/...`; the request's
+`actor_peer_id` must equal the URI peer before any provider call. LoopX rejects
+`viking://agent/...` as a Reward Memory write target because OpenViking v0.4.19
+keeps durable memories in the current User or actor-bound Peer namespace; the
+Agent scope is not the durable per-peer memory root. LoopX also rejects
+user-private paths without an actor-bound peer for an Agent-private corpus. Private peer
+reads/writes require CLI `>=0.4.18` and server `>=0.4.19`. See OpenViking's
+[multi-tenant model](https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/11-multi-tenant.md)
+and [context types](https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/02-context-types.md).
+
+Config v1 can bind one private Goal-scoped Agent only. Supplying several Agents
+with one private provider binding is rejected instead of silently sharing a
+peer. Account/public resources remain an explicit shared mode. A future
+same-Goal `goal_shared` memory must be a separate corpus with its own owner,
+reader allowlist, write/promotion policy, and receipt; runtime recall may then
+federate the Agent-private and Goal-shared corpora explicitly. Private memory is
+never promoted or made visible to a sibling Agent merely because both Agents
+belong to the same Goal.
+
+### Lifecycle completion boundary
+
+Provider readiness and lifecycle automation are separate status dimensions. A
+verified storage receipt does not by itself prove that automatic recall and
+writeback are connected to every host. Complete lifecycle enablement means the
+supported planning/decision entry points perform bounded recall, and real
+evidence-backed outcome reviews perform idempotent writeback without another
+hidden opt-in. No new evidence means no new memory. A missing identity never
+falls back to a shared corpus; provider degradation stays visible while base
+Goal work continues. Each host must report its actual coverage rather than
+generalizing from a direct CLI or helper test.
 
 Config v1 declares one `project_provider_binding`, its exact per-corpus scope
 references, the project corpus set, module-owned surfaces, and an automation
@@ -84,15 +130,22 @@ provider/corpus identity are still checked independently for every corpus.
     }
   ],
   "automation": {
-    "automatic_recall": false,
-    "automatic_ingest": false,
+    "automatic_recall": true,
+    "automatic_ingest": true,
     "fail_open": true
   }
 }
 ```
 
 The abbreviated corpus and standing-policy objects above represent the full
-existing record contracts. `experiment-status` reports the v1 config schema,
+existing record contracts. These `true` values show the new-enable default;
+an explicit `false` remains the supported per-hook opt-out. `configure-goal`
+preview now calls the provider
+preflight and reports `preflight_ready`, `preflight_incomplete`, or
+`unavailable`; it never reports a provider write as merely `planned`. Preview
+does not prove writability. Apply must complete the fresh canary write and
+exact readback before it commits the registry binding. `experiment-status`
+reports the v1 config schema,
 corpus/surface counts, recall-profile ids, and the effective automatic policy
 without exposing scope refs. Agent-scoped `quota should-run` and `status
 --agent-id` resolve that policy through the same invoked registry and config
@@ -118,8 +171,43 @@ remain responsible for exact actor/project/surface/action scope. The shared
 hook reuses deterministic candidate identity, activation, provider sync, exact
 readback, and an ingest receipt. It does not collect chats, parse tool logs,
 store raw content, or infer new authority. Repeated events remain idempotent.
-Both flags default to false, and the explicit `ingest-event` command remains an
-explicit operator/caller path rather than a compatibility fallback.
+When either automation field is omitted from a newly enabled v1 config it
+defaults to `true`; an explicit `false` remains disabled and is projected with
+`explicit` intent provenance. Existing false values are never silently
+reinterpreted. The explicit `ingest-event` command remains an operator/caller
+path rather than a compatibility fallback.
+
+The production Codex CLI Turn performs recall after quota/Todo admission and
+accepts outcome ingestion only after independent validation, durable writeback,
+and quota settlement. A reflection must use `turn_reward_memory_reflection_v0`
+and include an exact configured surface, a distinct research/simulation/real/
+engineering source kind, and opaque evidence refs; an ordinary Turn summary is
+not evidence. Ambiguous provider commits and unverified readbacks remain in a
+mode-0600 Goal+Agent+event sidecar. The next executing Turn retries the same
+deterministic event before recall, so the provider can deduplicate it and LoopX
+can require exact readback. Explicit disable suppresses reconciliation and all
+provider calls.
+
+The Codex App uses the same settlement boundary without copying the raw
+reflection into run indexes, rollout events, or public projections. For a
+Todo-bound accountable refresh, the caller may add
+`--reward-memory-reflection-json <turn_reward_memory_reflection_v0 JSON>`.
+LoopX stores that candidate only in a mode-0600 Goal+Agent+candidate sidecar and
+runs the exact completion-validation command already declared by that Todo. The
+validator must return `reward_memory_reflection_validation_v0` with the exact
+reflection digest and evidence references; an ordinary successful validation
+exit is insufficient. The later matching `quota spend-slot --execute` finalizes
+ingestion only after exact refresh/writeback and spend readback. A missing,
+failed, or non-attesting validation remains `awaiting_evidence_validation` and
+makes zero provider calls. The App does not need a separate manual
+`reward-memory ingest-event` command for this lifecycle. DSH currently carries
+recall context but does not claim this post-settlement ingest boundary.
+
+Dashboard, CLI/status, and Lark projections reuse the same capability owner and
+public receipt. Dashboard writes only an ignored config pointer and registered
+Goal-local Agent allowlist through the existing preview/apply/readback
+transaction. It returns an opaque binding revision, effective automation and
+intent provenance, never the local-private path or provider scope.
 
 An allowlisted agent supplies only the compact event at runtime:
 

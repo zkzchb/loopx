@@ -24,7 +24,7 @@ development and qualification surface, not a second implicit package channel.
 The archive snapshot remains a recovery path rather than a competing default.
 
 LoopX's Effect Program core runs in a managed, idle-exiting TypeScript runtime
-and requires Node.js 22.6 or later; Node.js 24 LTS is the recommended primary
+and requires Node.js 22.18.0 or later; Node.js 24 LTS is the recommended primary
 runtime. LoopX starts and reuses that local runtime automatically; users do not
 run a daemon manually. The runtime binds only to loopback, authenticates
 requests with a user-private token, rotates when the packaged Effect core
@@ -37,9 +37,15 @@ the App can render this projection without inventing a second health model.
 `stopped` is healthy and means the idle-exited runtime will restart on the next
 control-plane request. Validate Node before installing or upgrading LoopX:
 
+The CI and release lanes use Node.js 24 LTS. Node.js 26 remains a non-blocking
+forward-compatibility probe and is not a supported-version promise. After the
+Node.js 22 maintenance window ends, a separate policy change will raise the
+minimum to Node.js 24.12 or newer and remove no-longer-needed experimental
+flags.
+
 ```bash
 node --version
-# v22.6.0 or newer
+# v22.18.0 or newer
 ```
 
 Use `loopx doctor --deep` after installation to start the managed runtime and
@@ -129,6 +135,68 @@ surfaces remain explicit; inspect `loopx slash-commands --help` before enabling
 one. Host integration changes command discovery only. It does not grant LoopX
 permission to write a repository, contact external systems, or bypass a user
 gate.
+
+Codex installs expose only canonical `loopx-*` skills. Older managed
+`loop-global-*` skill aliases are retired; their catalog entries and native
+slash-host compatibility remain available. This changes the Codex picker,
+not goal execution or write authority.
+
+Both workflow and command installation reconcile managed duplicates between
+`CODEX_HOME/skills` (default `~/.codex/skills`) and `~/.agents/skills`.
+The selected installation root wins only when a replacement exists; a command
+facade cannot replace a rich workflow. Modified receipts, user-owned metadata,
+extra files, sole copies, and skill symlinks are preserved and reported under
+`skill_reconciliation` or `codex_skill_reconciliation`. A custom Codex profile
+does not authorize cleaning another profile. The fixed installer permits
+`LOOPX_SKILL_DEDUPE_OTHER_ROOT=0` for intentionally separate host roots.
+
+To inspect and repair command discovery for the current Codex profile:
+
+```bash
+loopx --format json slash-commands --surface codex --dry-run
+loopx --format json slash-commands --surface codex --install
+```
+
+Read the reconciliation result and resolve preserved conflicts explicitly.
+A running session may retain its original skill catalog; reload the host or
+open a new task before checking discovery again. Installation cannot rewrite
+instructions already loaded into a conversation.
+
+## Skill Discovery Scope
+
+Default workflow installation keeps `loopx-project`, `loopx-self-repair`,
+`loopx-pr-review`, `loopx-pr-program`, `loopx-doc-registry`, and `loopx-benchmark`
+globally visible in the selected host profile, alongside the generated
+`loopx` entry. These are reusable LoopX instructions: connection and repair
+must work before project setup, PR workflows can span repositories, and
+document/benchmark workflows retain their existing connected-project or
+LoopX-task triggers. Visibility does not activate a capability or authorize
+state changes, external publication, or benchmark jobs.
+
+The `loopx-global-summary`, `loopx-global-gates`, `loopx-global-todos`, and
+`loopx-global-risks` command skills also belong in the global host root. Install
+and inspect them through `loopx slash-commands --surface codex --install` and
+`loopx slash-commands --surface codex --dry-run`. They inspect the registry
+visible to the current user; discovery never expands account or project access.
+They remain optional command facades, separate from default workflow delivery.
+
+`loopx-material` and `loopx-change-quality` remain project-only by default.
+The release's `.loopx-skill-scope` marker declares `global` or `project`;
+both declared scopes support an explicit managed project copy:
+
+```bash
+loopx project-skill install --project . --skill loopx-self-repair --surface codex
+loopx project-skill install --project . --skill loopx-self-repair --surface codex --execute
+loopx project-skill status --project . --skill loopx-self-repair --surface codex
+loopx project-skill uninstall --project . --skill loopx-self-repair --surface codex --execute
+```
+
+Use a project copy only for an intentional override or isolated host. It leaves
+global copies untouched and retains project connection, ownership, digest,
+and containment checks. Missing or unknown source markers still fail closed.
+See [Project Skill Delivery](../../loopx/capabilities/project_skill_delivery/README.md)
+for lifecycle details. `loopx doctor` continues to require the complete default
+workflow set; a lone generated entry does not replace missing rich workflows.
 
 ## Upgrade And Repair
 

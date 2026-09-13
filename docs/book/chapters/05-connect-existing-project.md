@@ -120,7 +120,7 @@ next_action: <one concrete next step>
 要求：
 
 - Python 3.11 或更高版本；
-- Node.js 22.6 或更高版本，用于 LoopX 自动管理的 TypeScript Effect runtime；
+- Node.js 22.18.0 或更高版本，用于 LoopX 自动管理的 TypeScript Effect runtime；
 - macOS/Linux shell，或 Windows PowerShell 7；
 - 一个已有 Git 项目。
 
@@ -319,6 +319,18 @@ loopx configure-goal --goal-id <goal-id> --change-quality-enabled --execute
 对于 `multi_subagent`、Explore Graph、Explore Harness、Reward Memory、Lark inbox 等功能，读取
 当前 help 和 catalog delta，不要从名称猜参数。始终按“读 catalog -> preview -> 检查 delta ->
 execute -> readback”执行。
+
+配置入口可以使用全局 registry，但 Goal 的配置权威仍是 `source_registry` 指向的项目源。
+CLI 和前端设置的读取、预览、版本检查与写入都先解析该源，再同步全局投影；
+`--runtime-root` 选择投影目标，不改变配置权威。源不可读取时会报错，不会退回镜像写入并声称成功。
+这样后续项目同步不会撤销刚刚保存的设置。
+
+Configuration entry points may use the global registry, but the Goal's configuration authority
+remains the project registry identified by `source_registry`. CLI and frontend reads, previews,
+revision checks and writes resolve that source before synchronizing the global projection.
+`--runtime-root` selects the projection target, not a different authority. An unreadable source
+fails explicitly instead of falling back to a mirror write, so later project synchronization
+cannot undo a successfully saved setting.
 
 Todo 中的 `required_capabilities` 表示执行前必须已有的能力；`target_capabilities` 表示当前 Todo
 正在建设、修复或验证的能力。缺失 target 可以进入 repair mode，不能反过来阻止建设它的 Todo。

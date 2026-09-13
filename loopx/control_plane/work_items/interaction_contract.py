@@ -40,6 +40,7 @@ from .autonomous_replan_obligation import (
 )
 from .accountable_settlement import build_accountable_work_item_settlement_plan
 from . import action_selection_contract as selection
+from . import runtime_capability_reentry as capability_reentry_adapter
 from .primary_action import (
     build_primary_action_projection,
     protocol_action_label as _protocol_action_label,
@@ -48,7 +49,7 @@ from .primary_action import (
     protocol_monitor_action as _protocol_monitor_action,
 )
 from .replan_settlement import project_replan_settlement_contract
-from .runtime_capability_reentry import build_runtime_capability_reentry_packet
+from .unsettled_host_turn_contract import recovery_cli_actions
 from .user_action_frontier import user_action_owns_empty_agent_lane
 
 INTERACTION_CONTRACT_SCHEMA_VERSION = "loopx_interaction_contract_v0"
@@ -455,6 +456,8 @@ def _interaction_mode(payload: dict[str, Any]) -> str:
     state = str(payload.get("state") or "")
     if effective_action == "governed_capability_intent":
         return effective_action
+    if effective_action == "unsettled_host_turn_recovery":
+        return effective_action
     if effective_action == "agent_monitor_only":
         return "agent_monitor_only"
     if effective_action == "monitor_due":
@@ -667,6 +670,7 @@ def interaction_next_cli_actions(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
     capability_reentry: dict[str, Any] | None = None,
+    capability_reentry_resolved: bool = False,
     settlement_plan: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
@@ -763,8 +767,8 @@ def interaction_next_cli_actions(
             else None
         ),
     )
-    if capability_reentry is None:
-        capability_reentry = build_runtime_capability_reentry_packet(
+    if capability_reentry is None and not capability_reentry_resolved:
+        capability_reentry = capability_reentry_adapter.build_runtime_capability_reentry_packet(
             payload,
             available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
@@ -914,6 +918,15 @@ def interaction_next_cli_actions(
             "create or switch to an independent git worktree/branch",
             typed_quota_guard,
         ]
+    if mode == "unsettled_host_turn_recovery":
+        return recovery_cli_actions(
+            payload,
+            command_prefix=command_prefix,
+            goal_id=goal_id,
+            lifecycle_actor_args=lifecycle_actor_args,
+            typed_quota_guard=typed_quota_guard,
+            turn_instance_id=turn_instance_id,
+        )
     if mode == "autonomous_replan":
         return build_autonomous_replan_cli_actions(
             payload,
@@ -983,6 +996,8 @@ def _interaction_spend_policy(
         return "no spend while the current agent has no in-scope runnable candidate"
     if mode == "agent_workspace_repair":
         return "no spend for moving agent work into an independent worktree"
+    if mode == "unsettled_host_turn_recovery":
+        return "no spend for repairing the prior Turn closeout"
     if mode == "automation_prompt_upgrade":
         return "no spend until the host update is acknowledged and quota reruns"
     if mode == "capability_bridge_repair":
@@ -1172,22 +1187,11 @@ def _build_interaction_agent_channel(
         channel["action_portfolio_ref"] = "$.action_portfolio"
     selection.apply_action_selection_agent_gate(channel, payload)
     if capability_reentry is not None:
-        candidate = capability_reentry["candidates"][0]
-        target = candidate["verification_target"]
-        channel["next_task_action"] = {
-            "kind": "capability_verification",
-            "capability": candidate["capability"],
-            "todo_id": target["todo_id"],
-            "action_kind": target["action_kind"],
-            "operation": target["action_kind"],
-            "instruction": target["instruction"],
-            "preflight_allowed": False,
-            "advancement_checkpoint": False,
-            "settles_turn": False,
-            "continuation_cli_action_index": 0,
-        }
-        if target.get("target_ref"):
-            channel["next_task_action"]["target_ref"] = target["target_ref"]
+        capability_reentry_adapter.apply_agent_channel_projection(
+            channel,
+            capability_reentry,
+            selection_required=selection.action_portfolio_requires_explicit_selection(payload),
+        )
     if _blocked_successor_wait_observation_required(payload):
         channel["primary_action"] = (
             "record one no-spend blocked-successor wait observation, rerun quota, "
@@ -1269,14 +1273,6 @@ def _build_interaction_cli_channel(
     runtime_root: str | None = None,
 ) -> dict[str, Any]:
     spend_after_selection = selection.delivery_spend_allowed(payload, spend_after_validation)
-    if capability_reentry is None:
-        capability_reentry = build_runtime_capability_reentry_packet(
-            payload,
-            available_capabilities=available_capabilities,
-            scheduler_execution_context=scheduler_execution_context,
-            turn_instance_id=turn_instance_id,
-            runtime_root=runtime_root,
-        )
     settlement_plan, replan_settlement_contract = (
         _turn_scoped_cli_settlement_context(
             payload,
@@ -1293,6 +1289,7 @@ def _build_interaction_cli_channel(
             available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
             capability_reentry=capability_reentry,
+            capability_reentry_resolved=True,
             settlement_plan=settlement_plan,
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
@@ -1312,7 +1309,11 @@ def _build_interaction_cli_channel(
     if settlement_plan is not None and replan_settlement_contract is not None:
         channel["replan_settlement_contract"] = replan_settlement_contract
     if capability_reentry is not None:
-        channel["runtime_capability_reentry"] = capability_reentry
+        capability_reentry_adapter.apply_cli_channel_projection(
+            channel,
+            capability_reentry,
+            selection_required=selection.action_portfolio_requires_explicit_selection(payload),
+        )
     selected_todo = (
         payload.get("selected_todo")
         if isinstance(payload.get("selected_todo"), Mapping)
@@ -1424,6 +1425,7 @@ def _interaction_fallback_policy_required(payload: dict[str, Any], *, mode: str)
         "outcome_floor_recovery",
         "external_evidence_observation",
         "scoped_user_gate_fallback",
+        "unsettled_host_turn_recovery",
     } or bool(payload.get("blocked_priority_fallback"))
 
 
@@ -1481,7 +1483,7 @@ def build_interaction_contract(
         and todo_lifecycle_settlement_obligation(payload) is None
     )
     required_reads = _interaction_required_reads(payload)
-    capability_reentry = build_runtime_capability_reentry_packet(
+    capability_reentry = capability_reentry_adapter.build_runtime_capability_reentry_packet(
         payload,
         available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
