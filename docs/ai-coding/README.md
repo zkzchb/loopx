@@ -9,13 +9,14 @@ This directory defines the downstream AI-Coding platform built on LoopX.
 3. [`pds-bootstrap.md`](pds-bootstrap.md) — one-click PDS/PDS-Lab machine baseline.
 4. [`node-layout.md`](node-layout.md) — canonical filesystem and configuration locations.
 5. [`host-portability.md`](host-portability.md) — replaceable-host contract for PDS/PDS-Lab roles.
-6. [`runtime-lifecycle.md`](runtime-lifecycle.md) — stable runtime, canary, promotion and rollback lifecycle.
-7. [`host-matrix.md`](host-matrix.md) — Codex/Kiro/Qwen/Claude integration boundaries.
-8. [`bootstrap-validation.md`](bootstrap-validation.md) — clean-node and disposable-project validation checklist.
-9. [`agent-contract.md`](agent-contract.md) — normalized Agent Run lifecycle, evidence, and usage facts.
-10. [`dashboard.md`](dashboard.md) — dual-dashboard boundary and the three-tab product information architecture.
-11. [`qwen-code-adapter.md`](qwen-code-adapter.md) — downstream Qwen Code integration strategy.
-12. [`phase-0.md`](phase-0.md) — Phase 0 work packages and acceptance criteria.
+6. [`network-resilience.md`](network-resilience.md) — partial clone, retry policy, and external-connectivity qualification.
+7. [`runtime-lifecycle.md`](runtime-lifecycle.md) — stable runtime, canary, promotion and rollback lifecycle.
+8. [`host-matrix.md`](host-matrix.md) — Codex/Kiro/Qwen/Claude integration boundaries.
+9. [`bootstrap-validation.md`](bootstrap-validation.md) — clean-node and disposable-project validation checklist.
+10. [`agent-contract.md`](agent-contract.md) — normalized Agent Run lifecycle, evidence, and usage facts.
+11. [`dashboard.md`](dashboard.md) — dual-dashboard boundary and the three-tab product information architecture.
+12. [`qwen-code-adapter.md`](qwen-code-adapter.md) — downstream Qwen Code integration strategy.
+13. [`phase-0.md`](phase-0.md) — Phase 0 work packages and acceptance criteria.
 
 ## Working rule
 
@@ -23,6 +24,6 @@ LoopX is the control plane. Codex is the primary human interaction/planning surf
 
 Machine bootstrap, stable runtime management, source development, and project onboarding are deliberately separate lifecycles. Rebuilding PDS/PDS-Lab may recreate tools and host surfaces, but must not silently create, replace, or take over project Goal/Todo/Agent state. Editing `/project/loopx` must not change the active stable control plane until an explicit validation and promotion succeeds.
 
-PDS is operationally long-lived but still rebuildable. PDS-Lab is explicitly disposable: BCE, NERD, local Ubuntu, or a later VPS may assume the same role as long as the canonical initializer, `gany` identity, `/project` layout, and capability checks pass.
+PDS is operationally long-lived but still rebuildable. PDS-Lab is explicitly disposable: BCE, NERD, local Ubuntu, or a later VPS may assume the same role as long as the canonical initializer, `gany` identity, `/project` layout, capability checks, and stable access to the external development toolchain pass.
 
 The custom AI-Coding Dashboard is an independent projection client and is not a replacement for the upstream LoopX Dashboard.
