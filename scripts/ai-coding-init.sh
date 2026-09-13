@@ -16,6 +16,7 @@ PLATFORM_BRANCH="platform"
 BASELINE_LABEL="1.0"
 RESET_PASSWORD=0
 SKIP_TOOL_INSTALL=0
+GIT_NETWORK_RETRIES=4
 
 usage() {
   cat <<'USAGE'
@@ -142,6 +143,58 @@ gany_shell() {
     bash -lc "export PATH='$DEV_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH'; $*"
 }
 
+retry_delay() {
+  local attempt="$1"
+  local delay=$((3 * (1 << (attempt - 1))))
+  (( delay > 24 )) && delay=24
+  printf '%s' "$delay"
+}
+
+clone_platform_checkout() {
+  local attempt delay
+  for ((attempt=1; attempt<=GIT_NETWORK_RETRIES; attempt++)); do
+    rm -rf "$PLATFORM_ROOT"
+    if as_gany git clone \
+      --filter=blob:none \
+      --no-tags \
+      --branch "$PLATFORM_BRANCH" \
+      "$PLATFORM_REPO" "$PLATFORM_ROOT"; then
+      return 0
+    fi
+    if (( attempt == GIT_NETWORK_RETRIES )); then
+      break
+    fi
+    delay="$(retry_delay "$attempt")"
+    echo "WARNING: Git clone attempt $attempt/$GIT_NETWORK_RETRIES failed; retrying in ${delay}s." >&2
+    sleep "$delay"
+  done
+  echo "Failed to clone $PLATFORM_REPO after $GIT_NETWORK_RETRIES attempts." >&2
+  return 1
+}
+
+fetch_platform_refs() {
+  local attempt delay
+  for ((attempt=1; attempt<=GIT_NETWORK_RETRIES; attempt++)); do
+    if as_gany git -C "$PLATFORM_ROOT" fetch \
+      --filter=blob:none \
+      --no-tags \
+      --prune \
+      origin \
+      +refs/heads/main:refs/remotes/origin/main \
+      +refs/heads/platform:refs/remotes/origin/platform; then
+      return 0
+    fi
+    if (( attempt == GIT_NETWORK_RETRIES )); then
+      break
+    fi
+    delay="$(retry_delay "$attempt")"
+    echo "WARNING: Git fetch attempt $attempt/$GIT_NETWORK_RETRIES failed; retrying in ${delay}s." >&2
+    sleep "$delay"
+  done
+  echo "Failed to fetch main/platform after $GIT_NETWORK_RETRIES attempts." >&2
+  return 1
+}
+
 log "Configure conservative Git defaults"
 as_gany git config --global init.defaultBranch main
 as_gany git config --global pull.ff only
@@ -150,16 +203,14 @@ as_gany git config --global credential.helper ""
 
 log "Clone/update AI-Coding development checkout at $PLATFORM_ROOT"
 if [[ ! -d "$PLATFORM_ROOT/.git" ]]; then
-  as_gany git clone --branch "$PLATFORM_BRANCH" "$PLATFORM_REPO" "$PLATFORM_ROOT"
+  clone_platform_checkout
 else
   if [[ -n "$(as_gany git -C "$PLATFORM_ROOT" status --porcelain)" ]]; then
     echo "$PLATFORM_ROOT has local changes; refusing to overwrite it." >&2
     exit 1
   fi
 fi
-as_gany git -C "$PLATFORM_ROOT" fetch origin \
-  +refs/heads/main:refs/remotes/origin/main \
-  +refs/heads/platform:refs/remotes/origin/platform
+fetch_platform_refs
 as_gany git -C "$PLATFORM_ROOT" checkout "$PLATFORM_BRANCH"
 as_gany git -C "$PLATFORM_ROOT" merge --ff-only "origin/$PLATFORM_BRANCH"
 
